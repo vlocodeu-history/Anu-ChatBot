@@ -70,6 +70,10 @@ app.get('/api/users/public-key', (req, res) => {
   console.log(`🔑 Public key request for ${user}:`, pub ? 'Found' : 'Not found');
   res.json({ public_x: pub });
 });
+// Health check endpoint for Render
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 /* ---------------------------- server ---------------------------- */
 const httpServer = http.createServer(app)
