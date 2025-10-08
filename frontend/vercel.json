@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "https://anu-chatbot.onrender.com" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
