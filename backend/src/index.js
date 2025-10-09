@@ -19,14 +19,14 @@ const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Frontend origins (Render: set FRONTEND_URL to your Vercel URL; keep localhost for dev)
-const FRONTEND_URL = process.env.FRONTEND_URL;           // e.g. https://your-app.vercel.app
+const FRONTEND_URL = process.env.FRONTEND_URL;           // e.g. https://anu-chat-bot.vercel.app
 const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
 const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
 
 // Redis URL (leave unset to disable Redis; set to rediss://... to enable adapter + offline queue)
 const REDIS_URL = process.env.REDIS_URL || '';
 
-/* ---- demo users so login & contacts work ---- */
+/* ---- demo users so login & contacts work in demo mode ---- */
 const USERS = [
   { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
   { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
@@ -54,12 +54,24 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
+/* ------------------------------ routes ---------------------------- */
+
+// Auth router (supports real + demo auth)
 app.use('/api/auth', authRoutes);
 
 // Contacts demo API
 app.get('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.query.owner;
   if (!owner) return res.status(400).json({ error: 'owner missing' });
+
+  // Seed a simple default contact list for demo users
+  if (!contactsByUser.has(owner)) {
+    if (USERS.find(u => u.email === owner || u.id === owner)) {
+      const other = USERS.find(u => u.email !== owner && u.id !== owner);
+      if (other) contactsByUser.set(owner, [{ email: other.email, nickname: other.name }]);
+    }
+  }
+
   res.json(contactsByUser.get(owner) || []);
 });
 
@@ -85,17 +97,6 @@ app.get('/api/users/public-key', (req, res) => {
   console.log(`🔑 Public key request for ${user}:`, pub ? 'Found' : 'Not found');
   res.json({ public_x: pub });
 });
-
-// Demo auth endpoints
-app.post('/api/auth/login', (req, res) => {
-  const { email } = req.body || {};
-  const u = USERS.find((x) => x.email === email);
-  if (!u) return res.status(401).json({ error: 'Invalid credentials' });
-  const token = Buffer.from(`${u.id}.${Date.now()}`).toString('base64');
-  res.json({ user: { id: u.id, email: u.email, name: u.name }, token });
-});
-
-app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }));
 
 /* ----------------------- http + socket.io ------------------------- */
 const httpServer = http.createServer(app);
