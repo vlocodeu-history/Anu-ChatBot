@@ -1,5 +1,6 @@
+// src/pages/login.tsx
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { login } from '@/services/api';
 
 type User = { id: string; email: string; name?: string };
@@ -16,7 +17,7 @@ export default function LoginPage() {
     setErr(null);
     setLoading(true);
     try {
-      // send password so Supabase login works
+      // Send password so Supabase/real users can log in; demo users can still work server-side
       const { token, user } = await login(email, password);
       localStorage.setItem('token', token);
       localStorage.setItem('me', JSON.stringify({ id: user.id, email: user.email }));
@@ -54,9 +55,18 @@ export default function LoginPage() {
         autoComplete="current-password"
       />
 
-      <button className="border px-3 py-1" disabled={loading}>
-        {loading ? 'Signing in…' : 'Sign in'}
-      </button>
+      <div className="flex items-center gap-3">
+        <button className="border px-3 py-1" disabled={loading}>
+          {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+        <Link
+          to="/register"
+          className="text-sm underline hover:no-underline"
+          aria-label="Create an account"
+        >
+          Create an account
+        </Link>
+      </div>
 
       {err && <div className="text-red-600 text-sm">Login failed: {err}</div>}
 
