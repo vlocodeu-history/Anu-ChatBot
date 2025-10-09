@@ -1,4 +1,3 @@
-// src/pages/Chat.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -18,11 +17,7 @@ type WireMsg = {
 };
 type WireCipher = { nonce: string; cipher: string };
 
-const safeJson = <T,>(s: string | null): T | null => {
-  if (!s) return null;
-  try { return JSON.parse(s) as T; } catch { return null; }
-};
-
+const safeJson = <T,>(s: string | null): T | null => { if (!s) return null; try { return JSON.parse(s) as T; } catch { return null; } };
 const pubXFromContact = (c: Contact): string =>
   (c as any)?.publicKeys?.public_x ||
   (c as any)?.public_x ||
@@ -69,11 +64,9 @@ export default function ChatPage() {
   const token = localStorage.getItem('token') || '';
   const me = safeJson<Me>(localStorage.getItem('me')) || { id: '', email: '' };
 
-  // Kick to /login if no auth
+  // if unauthenticated, go to login
   useEffect(() => {
-    if (!token || (!me.id && !me.email)) {
-      navigate('/login', { replace: true });
-    }
+    if (!token || (!me.id && !me.email)) navigate('/login', { replace: true });
   }, [token, me.id, me.email, navigate]);
 
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -87,65 +80,51 @@ export default function ChatPage() {
   const [items, setItems] = useState<{ from: string; text: string; at: string }[]>([]);
 
   const myKeys = useMemo(() => loadOrCreateKeypair(), []);
-  const mySecretB64 =
-    (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
-  const myPublicB64 =
-    (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
+  const mySecretB64 = (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
+  const myPublicB64 = (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
 
-  const pickFirstContact = (list: Contact[]) => {
-    if (!list.length) return;
-    const c = list[0];
-    setPeerId(c.id || c.email);
-    setPeerEmail(c.email);
-    setPeerPubX(pubXFromContact(c));
-  };
-
-  async function refreshContacts() {
-    if (!me.id && !me.email) return;
-    setLoadingContacts(true);
-    try {
-      const raw = await getContacts(me.id || me.email);
-      const list: Contact[] = Array.isArray(raw)
-        ? raw
-        : Array.isArray((raw as any)?.contacts) ? (raw as any).contacts : [];
-      setContacts(list);
-      if (!peerId && list.length) pickFirstContact(list);
-    } finally {
-      setLoadingContacts(false);
-    }
-  }
-
-  // Go online once we have our public key
+  // Register presence (and my latest public key) with server
   useEffect(() => {
     if ((me.id || me.email) && myPublicB64) {
       goOnline(me.id || me.email, me.email, myPublicB64);
     }
   }, [myPublicB64, me.id, me.email]);
 
+  async function refreshContacts() {
+    if (!me.id && !me.email) return;
+    setLoadingContacts(true);
+    try {
+      const raw = await getContacts(me.id || me.email);
+      const list: Contact[] = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.contacts) ? (raw as any).contacts : [];
+      setContacts(list);
+      // auto-select first contact to fetch their public key (enables Send)
+      if (!peerId && list.length) await choose(list[0]);
+    } finally {
+      setLoadingContacts(false);
+    }
+  }
   useEffect(() => { refreshContacts().catch(console.error); }, [me.id, me.email]);
 
   async function choose(c: Contact) {
-    setPeerId(c.id || c.email);
+    const id = c.id || c.email;
+    setPeerId(id);
     setPeerEmail(c.email);
 
-    let key =
-      pubXFromContact(c) ||
-      localStorage.getItem(`pubkey:${c.id || c.email}`) ||
-      '';
+    let key = pubXFromContact(c) || localStorage.getItem(`pubkey:${id}`) || '';
 
     if (!key) {
       try {
-        const result = await getPublicKey(c.id || c.email); // GET /api/users/public-key?user=...
+        const result = await getPublicKey(id);
         if (result?.public_x) {
           key = result.public_x;
-          localStorage.setItem(`pubkey:${c.id || c.email}`, result.public_x);
+          localStorage.setItem(`pubkey:${id}`, key);
         }
       } catch (e) {
         console.warn('public key lookup failed', e);
       }
     }
 
-    setPeerPubX(key);
+    setPeerPubX(key);  // if still empty → Send will stay disabled
     setItems([]);
   }
 
@@ -168,7 +147,7 @@ export default function ChatPage() {
 
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
         setItems(prev => [...prev, { from, text, at: m.createdAt || new Date().toISOString() }]);
-      } catch (e) {
+      } catch {
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
         setItems(prev => [...prev, { from, text: '[encrypted]', at: m.createdAt || new Date().toISOString() }]);
       }
@@ -176,11 +155,11 @@ export default function ChatPage() {
 
     const offAck = onMessageSent(() => {});
     return () => { offRecv(); offAck(); };
-  }, [me.id, me.email, peerId, peerEmail, peerPubX, mySecretB64]);
+  }, [me.id, me.email, peerEmail, peerPubX, mySecretB64]);
 
   const send = () => {
     const plain = input.trim();
-    if (!plain || !peerPubX || !mySecretB64) return;
+    if (!plain || !peerEmail || !peerPubX || !mySecretB64) return;
 
     const shared = sharedKeyWith(peerPubX, mySecretB64);
     const payload = encrypt(plain, shared) as WireCipher;
