@@ -1,46 +1,40 @@
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_ORIGIN = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.replace(/\/+$/, '') || '';
-
-if (!SOCKET_ORIGIN) {
-  console.warn('Tip: set VITE_SOCKET_URL to your backend origin, e.g. https://anu-chatbot.onrender.com');
-}
+const SOCKET_ORIGIN =
+  (import.meta.env.VITE_SOCKET_URL as string | undefined)?.replace(/\/+$/, '') ||
+  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') ||
+  '';
 
 let socket: Socket | null = null;
 
 export function getSocket(): Socket {
   if (socket) return socket;
 
+  // If you didn’t set the envs, this will try same-origin which is fine in local dev
   socket = io(SOCKET_ORIGIN || '/', {
     path: '/socket.io',
-    transports: ['websocket'],     // avoid long-polling on serverless
+    transports: ['websocket'],
     withCredentials: true,
     autoConnect: true,
-    forceNew: false,
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
   });
 
   socket.on('connect', () => console.log('✅ socket connected', socket?.id));
   socket.on('disconnect', (r) => console.warn('❌ socket disconnected:', r));
-  socket.on('connect_error', (e) => console.error('⚠️ socket connect_error:', e?.message || e));
+  socket.on('connect_error', (e) => console.error('⚠️ socket connect_error:', e?.message));
   socket.onAny((event, ...args) => console.log('[SOCKET]', event, ...args)); // debug
-
   return socket;
 }
 
-type WireMsg = {
-  id: string;
-  senderId: string;
-  receiverId: string;
-  encryptedContent: string;
-  senderPubX?: string;
-  createdAt?: string;
-};
-
-export function onReceiveMessage(handler: (msg: WireMsg) => void) {
+export function onReceiveMessage(handler: {
+  (msg: {
+    id: string;
+    senderId: string;
+    receiverId: string;
+    encryptedContent: string;
+    senderPubX?: string;
+    createdAt?: string;
+  }): void;
+}) {
   const s = getSocket();
   s.on('message:received', handler);
   return () => s.off('message:received', handler);
@@ -52,7 +46,12 @@ export function onMessageSent(handler: (ack: { messageId: string }) => void) {
   return () => s.off('message:ack', handler);
 }
 
-export function sendEncryptedMessage(senderId: string, receiverId: string, encryptedContent: string, senderPubX?: string) {
+export function sendEncryptedMessage(
+  senderId: string,
+  receiverId: string,
+  encryptedContent: string,
+  senderPubX?: string
+) {
   const s = getSocket();
   s.emit('message:send', { senderId, receiverId, encryptedContent, senderPubX });
 }
