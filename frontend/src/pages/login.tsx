@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login, requireApiBase } from '@/services/api';
+import { login } from '@/services/api';
 
 type User = { id: string; email: string; name?: string };
 
 export default function LoginPage() {
   const [email, setEmail] = useState('alice@test.com');
-  const [password, setPassword] = useState('Passw0rd!'); // demo backend ignores it
+  const [password, setPassword] = useState('Passw0rd!');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -14,25 +14,20 @@ export default function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-
-    // Fail fast if no API base is configured (prevents "Signing in..." hang)
-    try {
-      requireApiBase();
-    } catch (e: any) {
-      setErr(String(e?.message || e));
-      return;
-    }
-
     setLoading(true);
     try {
+      // send password so Supabase login works
       const { token, user } = await login(email, password);
-      // persist minimal auth
       localStorage.setItem('token', token);
       localStorage.setItem('me', JSON.stringify({ id: user.id, email: user.email }));
       navigate('/chat', { replace: true });
     } catch (e: any) {
-      const msg = e?.response?.data?.error || e?.message || String(e);
-      setErr(`Login failed: ${msg}`);
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        String(e);
+      setErr(msg);
     } finally {
       setLoading(false);
     }
@@ -63,11 +58,11 @@ export default function LoginPage() {
         {loading ? 'Signing in…' : 'Sign in'}
       </button>
 
-      {err && <div className="text-red-600 text-sm">{err}</div>}
+      {err && <div className="text-red-600 text-sm">Login failed: {err}</div>}
 
       <div className="text-xs text-gray-500">
-        Tip: set <code>VITE_API_URL</code> and <code>VITE_SOCKET_URL</code> to your backend origin, e.g.{' '}
-        <code>https://anu-chatbot.onrender.com</code>
+        Tip: set <code>VITE_API_URL</code> (and optionally <code>VITE_SOCKET_URL</code>) to your backend origin,
+        e.g. <code>https://anu-chatbot.onrender.com</code>
       </div>
     </form>
   );
