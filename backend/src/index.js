@@ -16,7 +16,7 @@ const latestPubKeyByUser = new Map();
 const PORT = Number(process.env.PORT || 3001)
 const HOST = process.env.HOST || '0.0.0.0'
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173'
-const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+//const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
 
 /* ---- demo users so login & contacts work ---- */
 const USERS = [
@@ -86,9 +86,6 @@ const io = new Server(httpServer, {
 })
 
 /* ----------------------------- redis ---------------------------- */
-const redis = new Redis(REDIS_URL)
-redis.on('connect', () => console.log('✅ Connected to Redis'))
-redis.on('error', (err) => console.error('❌ Redis error:', err.message))
 let redisClient = null;
 if (process.env.REDIS_URL) {
   redisClient = createClient({ url: process.env.REDIS_URL });
@@ -99,16 +96,6 @@ if (process.env.REDIS_URL) {
 } else {
   console.log('Redis disabled: no REDIS_URL set');
 }
-// server/index.js (example)
-if (process.env.REDIS_URL) {
-  const client = createClient({ url: process.env.REDIS_URL });
-  client.on('error', (e) => console.error('Redis error:', e));
-  await client.connect();
-  app.locals.redis = client;
-} else {
-  console.log('Redis disabled: no REDIS_URL set');
-}
-
 
 /* ----------- online presence (userId/email -> socket) ----------- */
 const userSocketMap = new Map()
