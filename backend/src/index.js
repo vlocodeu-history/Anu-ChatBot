@@ -1,134 +1,171 @@
 // backend/src/index.js  (ESM)
-import express from 'express'
-import http from 'http'
-import { Server } from 'socket.io'
-import cors from 'cors'
-import Redis from 'ioredis'
-import { createClient } from 'redis';
-import dotenv from 'dotenv'
-import crypto from 'node:crypto'
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import crypto from 'node:crypto';
+import cookieParser from 'cookie-parser';
+
+import { createClient as createRedisClient } from 'redis';
+import { createAdapter } from '@socket.io/redis-adapter';
+
 import authRoutes from './routes/auth.js';
 
-dotenv.config()
-// add near other in-memory maps
-const latestPubKeyByUser = new Map();
+dotenv.config();
 
-const PORT = Number(process.env.PORT || 3001)
-const HOST = process.env.HOST || '0.0.0.0'
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173'
-const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+/* --------------------------- env/config --------------------------- */
+const PORT = Number(process.env.PORT || 3001);
+const HOST = process.env.HOST || '0.0.0.0';
+
+// Frontend origins (Render: set FRONTEND_URL to your Vercel URL; keep localhost for dev)
+const FRONTEND_URL = process.env.FRONTEND_URL;           // e.g. https://your-app.vercel.app
+const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
+const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
+
+// Redis URL (leave unset to disable Redis; set to rediss://... to enable adapter + offline queue)
+const REDIS_URL = process.env.REDIS_URL || '';
 
 /* ---- demo users so login & contacts work ---- */
 const USERS = [
   { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
   { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
-]
+];
 
-/* --------------------------- express ---------------------------- */
-const app = express()
-app.use(cors({ origin: CLIENT_URL, credentials: true }))
-app.use(express.json())
+/* ------------------- in-memory helpers/registries ----------------- */
+const latestPubKeyByUser = new Map(); // userId/email -> public_x
+const contactsByUser = new Map();     // ownerId/email -> [{ email, nickname }]
+const userSocketMap = new Map();      // userId/email -> socketId
+const socketUserMap = new Map();      // socketId -> userId/email
+
+/* ----------------------------- express ---------------------------- */
+const app = express();
+app.set('trust proxy', 1);
+
+// CORS must come BEFORE routes
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error(`CORS blocked for ${origin}`));
+  },
+  credentials: true,
+}));
+
+app.use(express.json());
+app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);
-// in-memory store; swap with Redis/DB later if you want
-const contactsByUser = new Map();
 
-// GET contacts for a user
+// Contacts demo API
 app.get('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.query.owner;
   if (!owner) return res.status(400).json({ error: 'owner missing' });
   res.json(contactsByUser.get(owner) || []);
 });
 
-// POST add a contact for a user
 app.post('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.body.owner;
   const { email, nickname } = req.body || {};
   if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
 
   const list = contactsByUser.get(owner) || [];
-  if (!list.find(c => c.email === email)) list.push({ email, nickname });
+  if (!list.find((c) => c.email === email)) list.push({ email, nickname });
   contactsByUser.set(owner, list);
   res.json(list);
 });
 
-/* ---------- simple REST so your frontend stops 404ing ----------- */
-app.get('/healthz', (_req, res) => res.json({ ok: true }))
+// Simple health checks
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-app.post('/api/auth/login', (req, res) => {
-  const { email } = req.body || {}
-  const u = USERS.find(x => x.email === email)
-  if (!u) return res.status(401).json({ error: 'Invalid credentials' })
-  const token = Buffer.from(`${u.id}.${Date.now()}`).toString('base64')
-  res.json({ user: { id: u.id, email: u.email, name: u.name }, token })
-})
-
-app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }))
-
+// Public key lookup
 app.get('/api/users/public-key', (req, res) => {
   const user = (req.query.user || '').toString();
   const pub = latestPubKeyByUser.get(user) || null;
   console.log(`🔑 Public key request for ${user}:`, pub ? 'Found' : 'Not found');
   res.json({ public_x: pub });
 });
-// Health check endpoint for Render
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+
+// Demo auth endpoints
+app.post('/api/auth/login', (req, res) => {
+  const { email } = req.body || {};
+  const u = USERS.find((x) => x.email === email);
+  if (!u) return res.status(401).json({ error: 'Invalid credentials' });
+  const token = Buffer.from(`${u.id}.${Date.now()}`).toString('base64');
+  res.json({ user: { id: u.id, email: u.email, name: u.name }, token });
 });
 
-/* ---------------------------- server ---------------------------- */
-const httpServer = http.createServer(app)
+app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }));
+
+/* ----------------------- http + socket.io ------------------------- */
+const httpServer = http.createServer(app);
+
 const io = new Server(httpServer, {
   path: '/socket.io',
-  cors: { origin: CLIENT_URL, credentials: true },
+  cors: { origin: allowedOrigins, credentials: true },
   pingTimeout: 30_000,
   pingInterval: 25_000,
-})
+});
 
-/* ----------------------------- redis ---------------------------- */
+/* ----------------------- Redis / adapter -------------------------- */
 let redisClient = null;
-if (process.env.REDIS_URL) {
-  redisClient = createClient({ url: process.env.REDIS_URL });
-  redisClient.on('connect', () => console.log('✅ Connected to Redis'));
-  redisClient.on('error', (e) => console.error('❌ Redis error:', e));
-  await redisClient.connect();
+
+async function initRedisAndAdapter() {
+  if (!REDIS_URL) {
+    console.log('Redis disabled: no REDIS_URL set');
+    return;
+  }
+
+  console.log('Connecting Redis & enabling Socket.IO adapter →', REDIS_URL);
+
+  const pub = createRedisClient({ url: REDIS_URL });
+  const sub = pub.duplicate();
+
+  pub.on('error', (e) => console.error('❌ Redis pub error:', e));
+  sub.on('error', (e) => console.error('❌ Redis sub error:', e));
+
+  await pub.connect();
+  await sub.connect();
+
+  // 🔗 This line makes rooms/broadcasts sync across instances
+  io.adapter(createAdapter(pub, sub));
+
+  // reuse pub client for offline queue operations (LPUSH/RPOP)
+  redisClient = pub;
   app.locals.redis = redisClient;
-} else {
-  console.log('Redis disabled: no REDIS_URL set');
+
+  console.log('✅ Redis connected & Socket.IO Redis adapter enabled');
 }
 
-/* ----------- online presence (userId/email -> socket) ----------- */
-const userSocketMap = new Map()
-const socketUserMap = new Map()
-
+/* ---------------- offline queue helpers (Redis) ------------------- */
 async function flushOfflineQueue(userKey, socket) {
   try {
-    const k = `offline:${userKey}`
+    if (!redisClient) return; // no Redis → nothing to flush
+    const k = `offline:${userKey}`;
     while (true) {
-      const raw = await redis.rpop(k)  // ← Changed from rPop to rpop (lowercase)
-      if (!raw) break
-      socket.emit('message:received', JSON.parse(raw))
+      const raw = await redisClient.rPop(k); // node-redis v4 camelCase
+      if (!raw) break;
+      socket.emit('message:received', JSON.parse(raw));
     }
-  } catch (e) { console.error('offline flush error:', e) }
+  } catch (e) {
+    console.error('offline flush error:', e);
+  }
 }
 
-
-
-/* --------------------------- socket.io -------------------------- */
+/* --------------------------- socket.io ---------------------------- */
 io.on('connection', (socket) => {
-  console.log('🔌 client connected:', socket.id)
+  console.log('🔌 client connected:', socket.id);
 
   socket.on('user:online', ({ userId, email, pubX } = {}) => {
     const userKey = userId || email;
     if (!userKey) return;
-    
-    // Store socket mapping by BOTH userId AND email
+
+    // Map user -> socket
     if (userId) userSocketMap.set(userId, socket.id);
     if (email) userSocketMap.set(email, socket.id);
     socketUserMap.set(socket.id, userKey);
 
     if (pubX) {
-      // Store by both userId AND email so lookup works either way
       if (userId) latestPubKeyByUser.set(userId, pubX);
       if (email) latestPubKeyByUser.set(email, pubX);
       console.log(`🔐 Stored public key for ${userId || ''} / ${email || ''}`);
@@ -146,40 +183,56 @@ io.on('connection', (socket) => {
         senderId,
         receiverId,
         encryptedContent,
-        senderPubX, // critical for E2EE
+        senderPubX, // for E2EE rotation
         createdAt: new Date().toISOString(),
-      }
+      };
 
-      socket.emit('message:ack', { messageId: message.id })
-      const recv = userSocketMap.get(receiverId)
+      // Ack to sender immediately
+      socket.emit('message:ack', { messageId: message.id });
+
+      // Deliver to receiver if online on this instance/any instance (adapter handles cross-instance)
+      const recv = userSocketMap.get(receiverId);
       if (recv) {
-        io.to(recv).emit('message:received', message)
+        io.to(recv).emit('message:received', message);
+      } else if (redisClient) {
+        // Queue for offline (only if Redis is available)
+        await redisClient.lPush(`offline:${receiverId}`, JSON.stringify(message));
+        socket.emit('message:queued', { receiverId });
+        console.log('⚠️ Receiver offline; queued (Redis)');
       } else {
-        await redis.lpush(`offline:${receiverId}`, JSON.stringify(message))  // ← Changed from lPush to lpush
-        socket.emit('message:queued', { receiverId })
-        console.log('⚠️ Receiver offline; queued')
+        // No Redis → cannot queue
+        console.log('⚠️ Receiver offline; not queued (Redis disabled)');
       }
     } catch (e) {
-      console.error('message:send error:', e)
+      console.error('message:send error:', e);
     }
-  })
+  });
 
   socket.on('disconnect', (reason) => {
-    const userKey = socketUserMap.get(socket.id)
+    const userKey = socketUserMap.get(socket.id);
     if (userKey) {
-      // Remove from all possible mappings
-      userSocketMap.delete(userKey)
-      // Also try to clean up by checking all entries
+      userSocketMap.delete(userKey);
+      // Clean any duplicate mappings pointing to this socket
       for (const [key, sid] of userSocketMap.entries()) {
-        if (sid === socket.id) userSocketMap.delete(key)
+        if (sid === socket.id) userSocketMap.delete(key);
       }
     }
-    socketUserMap.delete(socket.id)
-    console.log('❌ client disconnected:', socket.id, reason)
-  })
-})
+    socketUserMap.delete(socket.id);
+    console.log('❌ client disconnected:', socket.id, reason);
+  });
+});
 
-httpServer.listen(PORT, HOST, () => {
-  console.log(`🚀 Server running on http://${HOST}:${PORT}`)
-  console.log('🔐 E2EE Chat Backend Ready')
-})
+/* ------------------------------ start ----------------------------- */
+(async function start() {
+  try {
+    await initRedisAndAdapter(); // enable adapter if REDIS_URL exists
+    httpServer.listen(PORT, HOST, () => {
+      console.log(`🚀 Server running on http://${HOST}:${PORT}`);
+      console.log('🔐 E2EE Chat Backend Ready');
+      console.log('Allowed origins:', allowedOrigins);
+    });
+  } catch (e) {
+    console.error('Server start error:', e);
+    process.exit(1);
+  }
+})();
