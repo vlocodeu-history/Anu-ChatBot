@@ -110,38 +110,51 @@ const io = new Server(httpServer, {
 /* ----------------------- Redis / adapter -------------------------- */
 let redisClient = null;
 
+function redact(url) {
+  try {
+    const u = new URL(url);
+    const username = u.username ? `${u.username}@` : '';
+    return `${u.protocol}//${username}${u.host}`;
+  } catch {
+    return '(invalid URL)';
+  }
+}
+
 async function initRedisAndAdapter() {
- // replace inside initRedisAndAdapter()
-const raw = process.env.REDIS_URL;
-const needsTLS = raw?.includes('upstash.io') && raw?.startsWith('redis://');
-
-const pub = createRedisClient({
-  url: raw,
-  socket: needsTLS ? { tls: true } : undefined
-});
-const sub = pub.duplicate();
-
+  if (!REDIS_URL) {
+    console.log('Redis disabled: no REDIS_URL set');
+    return;
   }
 
-  console.log('Connecting Redis & enabling Socket.IO adapter →', REDIS_URL);
+  // Upstash via native protocol needs TLS. If someone pasted redis:// for an upstash host, force TLS.
+  const needsTLS = REDIS_URL.startsWith('redis://') && /upstash\.io$/i.test(new URL(REDIS_URL).hostname);
 
-  const pub = createRedisClient({ url: REDIS_URL });
-  const sub = pub.duplicate();
+  console.log('Connecting Redis & enabling Socket.IO adapter →', redact(REDIS_URL));
+  try {
+    const pub = createRedisClient({
+      url: REDIS_URL,
+      socket: needsTLS ? { tls: true } : undefined,
+    });
+    const sub = pub.duplicate();
 
-  pub.on('error', (e) => console.error('❌ Redis pub error:', e));
-  sub.on('error', (e) => console.error('❌ Redis sub error:', e));
+    pub.on('error', (e) => console.error('❌ Redis pub error:', e));
+    sub.on('error', (e) => console.error('❌ Redis sub error:', e));
 
-  await pub.connect();
-  await sub.connect();
+    await pub.connect();
+    await sub.connect();
 
-  // 🔗 This line makes rooms/broadcasts sync across instances
-  io.adapter(createAdapter(pub, sub));
+    // 🔗 Sync rooms/broadcasts across instances
+    io.adapter(createAdapter(pub, sub));
 
-  // reuse pub client for offline queue operations (LPUSH/RPOP)
-  redisClient = pub;
-  app.locals.redis = redisClient;
+    // Reuse pub client for offline queue operations (LPUSH/RPOP)
+    redisClient = pub;
+    app.locals.redis = redisClient;
 
-  console.log('✅ Redis connected & Socket.IO Redis adapter enabled');
+    console.log('✅ Redis connected & Socket.IO Redis adapter enabled');
+  } catch (err) {
+    console.error('Redis init failed; continuing without Redis:', err?.message || err);
+    // Leave redisClient = null; server will run without offline queues or cross-instance rooms
+  }
 }
 
 /* ---------------- offline queue helpers (Redis) ------------------- */
