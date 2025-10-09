@@ -16,7 +16,7 @@ const latestPubKeyByUser = new Map();
 const PORT = Number(process.env.PORT || 3001)
 const HOST = process.env.HOST || '0.0.0.0'
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173'
-//const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
 
 /* ---- demo users so login & contacts work ---- */
 const USERS = [
