@@ -13,11 +13,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'https://anu-chatbot.onrender.com',
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:3001',  // ← Changed from ws:// to http://
+        target: 'https://anu-chatbot.onrender.com',  // ← Changed from ws:// to http://
         ws: true,
         changeOrigin: true,
       },
