@@ -111,9 +111,16 @@ const io = new Server(httpServer, {
 let redisClient = null;
 
 async function initRedisAndAdapter() {
-  if (!REDIS_URL) {
-    console.log('Redis disabled: no REDIS_URL set');
-    return;
+ // replace inside initRedisAndAdapter()
+const raw = process.env.REDIS_URL;
+const needsTLS = raw?.includes('upstash.io') && raw?.startsWith('redis://');
+
+const pub = createRedisClient({
+  url: raw,
+  socket: needsTLS ? { tls: true } : undefined
+});
+const sub = pub.duplicate();
+
   }
 
   console.log('Connecting Redis & enabling Socket.IO adapter →', REDIS_URL);
