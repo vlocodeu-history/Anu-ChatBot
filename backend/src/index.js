@@ -4,6 +4,7 @@ import http from 'http'
 import { Server } from 'socket.io'
 import cors from 'cors'
 import Redis from 'ioredis'
+import { createClient } from 'redis';
 import dotenv from 'dotenv'
 import crypto from 'node:crypto'
 import authRoutes from './routes/auth.js';
@@ -88,6 +89,26 @@ const io = new Server(httpServer, {
 const redis = new Redis(REDIS_URL)
 redis.on('connect', () => console.log('✅ Connected to Redis'))
 redis.on('error', (err) => console.error('❌ Redis error:', err.message))
+let redisClient = null;
+if (process.env.REDIS_URL) {
+  redisClient = createClient({ url: process.env.REDIS_URL });
+  redisClient.on('connect', () => console.log('✅ Connected to Redis'));
+  redisClient.on('error', (e) => console.error('❌ Redis error:', e));
+  await redisClient.connect();
+  app.locals.redis = redisClient;
+} else {
+  console.log('Redis disabled: no REDIS_URL set');
+}
+// server/index.js (example)
+if (process.env.REDIS_URL) {
+  const client = createClient({ url: process.env.REDIS_URL });
+  client.on('error', (e) => console.error('Redis error:', e));
+  await client.connect();
+  app.locals.redis = client;
+} else {
+  console.log('Redis disabled: no REDIS_URL set');
+}
+
 
 /* ----------- online presence (userId/email -> socket) ----------- */
 const userSocketMap = new Map()
@@ -103,6 +124,8 @@ async function flushOfflineQueue(userKey, socket) {
     }
   } catch (e) { console.error('offline flush error:', e) }
 }
+
+
 
 /* --------------------------- socket.io -------------------------- */
 io.on('connection', (socket) => {
