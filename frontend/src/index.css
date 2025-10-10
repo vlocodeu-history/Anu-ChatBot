@@ -1,66 +1,165 @@
+/* Tailwind core */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ---------- Base resets & page bg ---------- */
 @layer base {
+  html, body, #root {
+    @apply h-full;
+  }
   body {
-    @apply antialiased;
+    @apply antialiased text-gray-900 bg-[rgb(17,27,33)];
+    /* WhatsApp-style wallpaper split */
+    background-image:
+      linear-gradient(#0b141a 25%, #111b21 25%),
+      linear-gradient(#111b21, #111b21);
+    background-size: 100% 222px, 100% 100%;
+    background-repeat: no-repeat;
   }
 }
 
+/* ---------- Components ---------- */
 @layer components {
+  /* AppShell layout */
+  .app-shell {
+    @apply mx-auto h-[calc(100vh-24px)] w-full max-w-6xl
+           rounded-md shadow-lg overflow-hidden
+           bg-gray-200;
+  }
+
+  .app-header {
+    @apply h-14 bg-brand-500 text-white flex items-center justify-between px-4 shadow-header;
+  }
+
+  .pane {
+    @apply h-full;
+  }
+  .pane-left {
+    @apply w-80 bg-chat-pane border-r border-gray-200 flex flex-col;
+  }
+  .pane-right {
+    @apply flex-1 bg-chat-bg flex flex-col;
+  }
+
+  /* Search / add bar in contacts */
+  .contacts-toolbar {
+    @apply p-3 border-b border-gray-200 bg-white;
+  }
+
+  /* Contact item */
+  .contact-item {
+    @apply flex items-center gap-3 px-3 py-2 cursor-pointer select-none
+           hover:bg-gray-100 transition-colors;
+  }
+  .contact-item.active {
+    @apply bg-gray-100;
+  }
+  .avatar {
+    @apply w-9 h-9 rounded-full bg-gray-300 flex items-center justify-center text-xs font-semibold uppercase;
+  }
+  .presence-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+  .presence-online {
+    @apply bg-green-500;
+  }
+  .presence-offline {
+    @apply bg-gray-400;
+  }
+
+  /* Chat header (peer info) */
+  .chat-topbar {
+    @apply h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4;
+  }
+
+  /* Messages area */
+  .messages {
+    @apply flex-1 overflow-y-auto p-4 md:p-6 space-y-1.5 scrollbar-thin;
+    background-image: url('/chat-paper.png');
+    background-size: cover;
+    background-blend-mode: multiply;
+  }
+
+  /* Message bubble */
+  .message-row {
+    @apply w-full flex;
+  }
+  .message-row.me   { @apply justify-end; }
+  .message-row.them { @apply justify-start; }
+
   .message-bubble {
-    animation: slideIn 0.3s ease-out;
+    @apply max-w-[78%] md:max-w-[68%] rounded-lg px-3 py-2 text-sm leading-5 message-animate shadow;
+  }
+  .bubble-me {
+    @apply bg-[rgba(217,253,211,1)] /* chat.me */;
+  }
+  .bubble-them {
+    @apply bg-white;
+  }
+  .message-meta {
+    @apply text-[10px] text-gray-500 mt-0.5 flex items-center gap-1;
   }
 
-  @keyframes slideIn {
-    from {
-      opacity: 0;
-      transform: translateY(10px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+  /* Input bar */
+  .input-bar {
+    @apply bg-white border-t border-gray-200 p-2 flex items-end gap-2;
+  }
+  .input-field {
+    @apply flex-1 min-h-[44px] max-h-40 overflow-auto
+           bg-gray-50 border border-gray-200 rounded-lg
+           px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400;
+  }
+  .send-btn {
+    @apply h-10 px-4 rounded-lg bg-brand-500 text-white font-medium
+           disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
+  /* Encryption badge */
+  .encryption-badge {
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800;
+  }
+
+  /* File upload drop zone (optional) */
+  .file-upload-zone {
+    @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-brand-500 transition-colors;
+  }
+
+  /* Typing indicator */
   .typing-indicator {
     @apply inline-flex space-x-1;
   }
-
   .typing-indicator span {
     @apply w-2 h-2 bg-gray-400 rounded-full animate-pulse;
   }
 
-  .file-upload-zone {
-    @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors;
+  /* Slide-in anim for bubbles */
+  .message-animate {
+    animation: slideIn 0.22s ease-out;
   }
-
-  .encryption-badge {
-    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800;
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0)   scale(1); }
   }
 }
 
+/* ---------- Utilities ---------- */
 @layer utilities {
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: rgb(203 213 225) transparent;
   }
-
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
-
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
   }
-
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: rgb(203 213 225);
     border-radius: 3px;
   }
-
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: rgb(148 163 184);
   }
