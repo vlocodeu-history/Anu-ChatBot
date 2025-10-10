@@ -30,6 +30,8 @@ export default function AppShell({
             </button>
             <div className="font-semibold tracking-wide">{title}</div>
           </div>
+
+          {/* you asked to remove Refresh; we still leave a slot for future actions */}
           <div className="flex items-center gap-2">{right}</div>
         </div>
       </header>
