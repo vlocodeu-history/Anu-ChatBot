@@ -1,30 +1,34 @@
-export type ContactItemProps = {
-  selected?: boolean;
-  title: string;
-  subtitle?: string;
-  onClick?: () => void;
-};
-
+// src/ui/ContactItem.tsx
 export default function ContactItem({
-  selected,
   title,
   subtitle,
+  active,
   onClick,
-}: ContactItemProps) {
+}: {
+  title: string;
+  subtitle?: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  const initials = title?.charAt(0)?.toUpperCase() || 'U';
   return (
-    <button
+    <li
       onClick={onClick}
       className={[
-        "w-full text-left px-4 py-3 flex flex-col gap-0.5",
-        "hover:bg-black/5 focus:bg-black/5 outline-none",
-        selected ? "bg-black/5" : "",
-        "border-b border-black/5",
-      ].join(" ")}
+        'px-3 py-3 border-b cursor-pointer select-none',
+        'hover:bg-emerald-50 transition',
+        active ? 'bg-emerald-100/60' : 'bg-white',
+      ].join(' ')}
     >
-      <div className="font-medium text-gray-900 truncate">{title}</div>
-      {subtitle && (
-        <div className="text-xs text-gray-500 truncate">{subtitle}</div>
-      )}
-    </button>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
+          {initials}
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-medium truncate">{title}</div>
+          {subtitle && <div className="text-xs text-slate-500 truncate">{subtitle}</div>}
+        </div>
+      </div>
+    </li>
   );
 }
