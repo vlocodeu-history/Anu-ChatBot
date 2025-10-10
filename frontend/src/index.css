@@ -3,52 +3,41 @@
 @tailwind utilities;
 
 @layer base {
-  html, body, #root {
-    height: 100%;
+  :root{
+    --chat-paper: #ece5dd; /* WhatsApp-like paper tone */
   }
   body {
-    @apply antialiased bg-emerald-50;
+    @apply antialiased bg-slate-50 text-slate-900;
   }
 }
 
-/* Subtle WhatsApp-like wallpaper for the chat column.
-   Kept very low opacity so text stays readable. */
-.chat-wallpaper {
-  /* base paper tone */
-  background-color: #eae4db;
-  background-image:
-    radial-gradient(60% 40% at 80% 12%, rgba(16,185,129,0.12), rgba(16,185,129,0) 60%),
-    radial-gradient(45% 55% at 12% 18%, rgba(244,114,182,0.10), rgba(244,114,182,0) 60%),
-    radial-gradient(45% 55% at 88% 72%, rgba(234,179,8,0.10), rgba(234,179,8,0) 60%),
-    radial-gradient(55% 45% at 18% 82%, rgba(59,130,246,0.08), rgba(59,130,246,0) 60%),
-    /* tiny dots */
-    radial-gradient(circle at 30% 30%, rgba(0,0,0,0.03) 2px, transparent 3px) 0 0/24px 24px,
-    radial-gradient(circle at 70% 60%, rgba(0,0,0,0.02) 1.5px, transparent 3px) 0 0/18px 18px;
-}
-
-/* Message bubble entrance */
+/* -------- Components -------- */
 @layer components {
   .message-bubble {
-    animation: slideIn 0.18s ease-out;
-  }
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateY(6px) }
-    to   { opacity: 1; transform: translateY(0) }
+    animation: slideIn 0.25s ease-out;
+    will-change: transform, opacity;
   }
 
-  /* mini utilities used around the app */
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
   .typing-indicator { @apply inline-flex space-x-1; }
   .typing-indicator span { @apply w-2 h-2 bg-gray-400 rounded-full animate-pulse; }
 
-  .file-upload-zone { @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-emerald-500 transition-colors; }
-  .encryption-badge { @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800; }
+  .file-upload-zone {
+    @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-emerald-500 transition-colors;
+  }
+
+  .encryption-badge {
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800;
+  }
 }
 
+/* -------- Utilities -------- */
 @layer utilities {
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: rgb(203 213 225) transparent;
-  }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: rgb(203 213 225) transparent; }
   .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb { background-color: rgb(203 213 225); border-radius: 3px; }
