@@ -1,33 +1,62 @@
-import { ReactNode } from "react";
+import { ReactNode } from 'react';
 
 export default function AppShell({
-  headerLeft,
-  headerRight,
+  title,
+  right,
   sidebar,
   children,
+  sidebarOpen,
+  setSidebarOpen,
 }: {
-  headerLeft?: ReactNode;
-  headerRight?: ReactNode;
+  title: string;
+  right?: ReactNode;
   sidebar: ReactNode;
-  children: ReactNode; // chat pane
+  children: ReactNode;
+  sidebarOpen: boolean;
+  setSidebarOpen: (v: boolean) => void;
 }) {
   return (
-    <div className="h-screen w-screen bg-chat-bg">
-      {/* Top app bar */}
-      <header className="h-14 flex items-center justify-between px-4 bg-brand-500 text-white shadow-header">
-        <div className="font-semibold tracking-wide">{headerLeft}</div>
-        <div className="flex items-center gap-3">{headerRight}</div>
+    <div className="h-screen w-full flex flex-col bg-slate-50">
+      {/* Top bar */}
+      <header className="h-14 shrink-0 bg-emerald-700 text-white">
+        <div className="h-full max-w-7xl mx-auto px-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 md:hidden"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              aria-label="Toggle contacts"
+            >
+              ☰
+            </button>
+            <div className="font-semibold tracking-wide">{title}</div>
+          </div>
+          <div className="flex items-center gap-2">{right}</div>
+        </div>
       </header>
 
-      {/* Body: sidebar + chat */}
-      <div className="grid grid-cols-[380px_minmax(0,1fr)] h-[calc(100vh-3.5rem)]">
-        {/* Sidebar */}
-        <aside className="bg-chat-pane border-r border-black/5 overflow-hidden">
-          {sidebar}
-        </aside>
+      {/* Body */}
+      <div className="flex-1 relative overflow-hidden">
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black/25 z-10 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
 
-        {/* Chat content */}
-        <main className="relative">{children}</main>
+        <div className="h-full w-full flex">
+          {/* Sidebar */}
+          <aside
+            className={[
+              'absolute md:static z-20 h-full bg-white border-r transition-all duration-300 shadow md:shadow-none',
+              sidebarOpen ? 'w-[320px] translate-x-0' : 'w-0 -translate-x-full md:w-[320px] md:translate-x-0',
+            ].join(' ')}
+          >
+            {sidebar}
+          </aside>
+
+          {/* Main */}
+          <main className="flex-1 min-w-0">{children}</main>
+        </div>
       </div>
     </div>
   );
