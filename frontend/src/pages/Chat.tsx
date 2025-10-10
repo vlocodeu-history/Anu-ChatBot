@@ -1,4 +1,3 @@
-// src/pages/Chat.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -11,8 +10,9 @@ import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
 import MessageBubble from '@/components/MessageBubble';
 import ChatWallpaper from '@/components/ChatWallpaper';
+import MessageInput from '@/components/MessageInput';
 
-const BUILD_TAG = 'v4-no-refresh'; // <-- shows in header so you can confirm
+const BUILD_TAG = 'v5-metronic-emoji'; // shows in header
 
 type Me = { id: string; email: string };
 type WireMsg = {
@@ -52,12 +52,24 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
 
   return (
     <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2">
-      <input className="border px-3 py-2 rounded w-[46%] text-sm" placeholder="email@domain"
-             value={email} onChange={(e) => setEmail(e.target.value)} />
-      <input className="border px-3 py-2 rounded w-[38%] text-sm" placeholder="nickname (opt)"
-             value={nick} onChange={(e) => setNick(e.target.value)} />
-      <button className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
-              aria-label="Add contact" title="Add contact" disabled={busy || !email.trim()}>
+      <input
+        className="border px-3 py-2 rounded w-[46%] text-sm"
+        placeholder="email@domain"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <input
+        className="border px-3 py-2 rounded w-[38%] text-sm"
+        placeholder="nickname (opt)"
+        value={nick}
+        onChange={(e) => setNick(e.target.value)}
+      />
+      <button
+        className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+        aria-label="Add contact"
+        title="Add contact"
+        disabled={busy || !email.trim()}
+      >
         +
       </button>
       {err && <span className="text-red-600 text-xs ml-2">Failed: {err}</span>}
@@ -82,7 +94,6 @@ export default function ChatPage() {
   const [peerEmail, setPeerEmail] = useState('');
   const [peerPubX, setPeerPubX] = useState('');
 
-  const [input, setInput] = useState('');
   const [items, setItems] = useState<{ from: string; text: string; at: string; status?: LocalStatus }[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -179,8 +190,8 @@ export default function ChatPage() {
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64]);
 
-  const send = () => {
-    const plain = input.trim();
+  /** Send handler used by MessageInput (text + optional file) */
+  const handleSend = (plain: string, _file?: File) => {
     if (!plain || !peerEmail || !peerPubX || !mySecretB64) return;
 
     const shared = sharedKeyWith(peerPubX, mySecretB64);
@@ -205,7 +216,6 @@ export default function ChatPage() {
         return copy;
       });
     }
-    setInput('');
   };
 
   const signOut = () => {
@@ -260,16 +270,20 @@ export default function ChatPage() {
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
     >
+      {/* Chat header (Metronic-style) */}
       <div className="h-14 bg-white border-b px-4 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
-          {(peerEmail?.[0] || 'U').toUpperCase()}
-        </div>
+        <img
+          src={`https://ui-avatars.com/api/?name=${encodeURIComponent(peerEmail || 'User')}&background=10b981&color=fff&size=64`}
+          alt="avatar"
+          className="w-9 h-9 rounded-full"
+        />
         <div className="min-w-0">
           <div className="font-medium truncate">{peerEmail || '—'}</div>
           <div className="text-xs text-slate-500 truncate">Encrypted chat</div>
         </div>
       </div>
 
+      {/* Messages & wallpaper */}
       <div className="relative flex-1 overflow-auto bg-[var(--chat-paper,#ece5dd)]">
         <ChatWallpaper variant="moroccan" />
         <div className="relative z-10 p-5 space-y-3">
@@ -280,32 +294,14 @@ export default function ChatPage() {
               side={m.from === 'Me' ? 'right' : 'left'}
               text={m.text}
               time={new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              status={m.status}
+              status={m.status} // MessageBubble should show dot color: green=delivered, red=failed, orange=pending
             />
           ))}
         </div>
       </div>
 
-      <div className="h-[72px] bg-white border-t px-3 flex items-center gap-2">
-        <div className="hidden md:flex items-center gap-2 text-slate-500">
-          <button className="px-3 py-2 rounded hover:bg-slate-50" title="Attach">📎</button>
-          <button className="px-3 py-2 rounded hover:bg-slate-50" title="Emoji">😊</button>
-        </div>
-        <input
-          className="flex-1 h-11 rounded-full px-4 border focus:outline-none focus:ring-2 focus:ring-emerald-500"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type a message…"
-          onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
-        />
-        <button
-          className="h-11 px-6 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
-          onClick={send}
-          disabled={!peerEmail || !peerPubX}
-        >
-          Send
-        </button>
-      </div>
+      {/* Composer with emoji + attach */}
+      <MessageInput onSend={handleSend} disabled={!peerEmail || !peerPubX} />
     </AppShell>
   );
 }
