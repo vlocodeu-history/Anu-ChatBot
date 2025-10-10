@@ -1,18 +1,15 @@
-import React from 'react'
-import { createRoot } from 'react-dom/client'
-import App from './App'
+import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./index.css"; // Tailwind
 
-const el = document.getElementById('root')
-if (!el) {
-  // If this triggers, index.html doesn't have <div id="root"></div>
-  throw new Error('Root element #root not found')
-}
+const el = document.getElementById("root");
+if (!el) throw new Error("Root element #root not found");
 
-const root = createRoot(el)
-root.render(
+createRoot(el).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>
-)
+);
 
-console.log('main.tsx mounted OK')
+console.log("main.tsx mounted OK");
