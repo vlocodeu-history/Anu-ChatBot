@@ -1,64 +1,55 @@
-import { ReactNode } from 'react';
+import React from 'react';
 
+type Props = {
+  title?: string;
+  right?: React.ReactNode;
+  sidebar: React.ReactNode;
+  sidebarOpen: boolean;
+  setSidebarOpen(open: boolean): void;
+  children: React.ReactNode;
+};
+
+/** Layout with top bar + collapsible sidebar */
 export default function AppShell({
-  title,
+  title = 'My Chat',
   right,
   sidebar,
-  children,
   sidebarOpen,
   setSidebarOpen,
-}: {
-  title: string;
-  right?: ReactNode;
-  sidebar: ReactNode;
-  children: ReactNode;
-  sidebarOpen: boolean;
-  setSidebarOpen: (v: boolean) => void;
-}) {
+  children,
+}: Props) {
   return (
     <div className="h-screen w-full flex flex-col bg-slate-50">
       {/* Top bar */}
-      <header className="h-14 shrink-0 bg-emerald-700 text-white">
-        <div className="h-full max-w-7xl mx-auto px-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 md:hidden"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              aria-label="Toggle contacts"
-            >
-              ☰
-            </button>
-            <div className="font-semibold tracking-wide">{title}</div>
-          </div>
-
-          {/* you asked to remove Refresh; we still leave a slot for future actions */}
-          <div className="flex items-center gap-2">{right}</div>
-        </div>
-      </header>
-
-      {/* Body */}
-      <div className="flex-1 relative overflow-hidden">
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 bg-black/25 z-10 md:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-
-        <div className="h-full w-full flex">
-          {/* Sidebar */}
-          <aside
-            className={[
-              'absolute md:static z-20 h-full bg-white border-r transition-all duration-300 shadow md:shadow-none',
-              sidebarOpen ? 'w-[320px] translate-x-0' : 'w-0 -translate-x-full md:w-[320px] md:translate-x-0',
-            ].join(' ')}
+      <div className="flex items-center justify-between px-4 h-14 bg-emerald-700 text-white">
+        <div className="flex items-center gap-2">
+          <button
+            className="md:hidden inline-flex w-9 h-9 rounded hover:bg-white/10"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label="Toggle sidebar"
           >
-            {sidebar}
-          </aside>
-
-          {/* Main */}
-          <main className="flex-1 min-w-0">{children}</main>
+            ☰
+          </button>
+          <div className="font-semibold truncate">{title}</div>
         </div>
+        <div className="flex items-center gap-2">{right}</div>
+      </div>
+
+      {/* Main area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar */}
+        <aside
+          className={`${
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          } md:translate-x-0 transition-transform duration-200 w-[320px] shrink-0 border-r bg-white relative`}
+        >
+          {sidebar}
+        </aside>
+
+        {/* Content */}
+        <section className="flex-1 flex flex-col min-w-0 relative">
+          {children}
+        </section>
       </div>
     </div>
   );
