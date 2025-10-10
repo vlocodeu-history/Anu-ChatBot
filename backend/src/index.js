@@ -1,4 +1,4 @@
-// backend/src/index.js  (ESM)
+// backend/src/index.js
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -6,11 +6,19 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import crypto from 'node:crypto';
 import cookieParser from 'cookie-parser';
-
 import { createClient as createRedisClient } from 'redis';
 import { createAdapter } from '@socket.io/redis-adapter';
 
 import authRoutes from './routes/auth.js';
+
+// Try to load Supabase (optional in demo)
+let supabase = null;
+try {
+  const mod = await import('./config/supabase.js');
+  supabase = mod.supabase || null;
+} catch {
+  supabase = null;
+}
 
 dotenv.config();
 
@@ -18,33 +26,13 @@ dotenv.config();
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
 
-// Frontend origins
-const FRONTEND_URL = process.env.FRONTEND_URL;           // e.g. https://your-app.vercel.app
+const FRONTEND_URL = process.env.FRONTEND_URL;            // e.g. https://your-frontend.vercel.app
 const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
 const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
 
-// Redis URL
 const REDIS_URL = process.env.REDIS_URL || '';
 
-/* --------------------- Supabase (optional) ----------------------- */
-let supabase = null;
-(async () => {
-  try {
-    const { createClient } = await import('@supabase/supabase-js');
-    const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (url && key) {
-      supabase = createClient(url, key, { auth: { persistSession: false } });
-      console.log('✅ Supabase client enabled');
-    } else {
-      console.log('ℹ️ Supabase not configured (no SUPABASE_URL / SERVICE_ROLE_KEY) → using in-memory for contacts/messages');
-    }
-  } catch (e) {
-    console.log('ℹ️ Supabase client not available → using in-memory for contacts/messages');
-  }
-})();
-
-/* ---- demo users so login & contacts work in demo ---- */
+/* ---- demo users so login & contacts work ---- */
 const USERS = [
   { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
   { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
@@ -60,7 +48,6 @@ const socketUserMap = new Map();      // socketId -> userId/email
 const app = express();
 app.set('trust proxy', 1);
 
-// CORS must come BEFORE routes
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
@@ -74,159 +61,48 @@ app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);
 
-/* ------------------------- Supabase helpers ----------------------- */
-// Resolve a user id from an email or id; create a placeholder row if email not found.
-async function ensureUserId(key /* email or uuid */) {
-  if (!supabase) return key; // no-op when Supabase disabled
-  if (!key) return null;
-
-  // UUID-like? assume already id
-  if (/^[0-9a-f-]{36}$/i.test(key)) return key;
-
-  const email = String(key).trim().toLowerCase();
-  const { data: rows, error } = await supabase
-    .from('users').select('id').eq('email', email).limit(1);
-  if (error) throw error;
-
-  const found = rows?.[0]?.id;
-  if (found) return found;
-
-  // Insert minimal user row so we can reference it
-  const { data: ins, error: insErr } = await supabase
-    .from('users')
-    .insert([{ email }])
-    .select('id')
-    .single();
-  if (insErr) throw insErr;
-  return ins.id;
-}
-
-// Save/return latest public key (prefers memory for live users; persists in Supabase when available)
-async function setPublicKey(userKey, publicX) {
-  if (!userKey || !publicX) return;
-  latestPubKeyByUser.set(userKey, publicX);
-  if (supabase) {
-    try {
-      const userId = await ensureUserId(userKey);
-      await supabase.from('users')
-        .update({ public_key_x: publicX })
-        .eq('id', userId);
-    } catch (e) {
-      console.warn('⚠️ setPublicKey persist failed:', e?.message || e);
-    }
-  }
-}
-async function getPublicKeyFor(userKey) {
-  const mem = latestPubKeyByUser.get(userKey);
-  if (mem) return mem;
-  if (supabase) {
-    try {
-      const userId = await ensureUserId(userKey);
-      const { data, error } = await supabase
-        .from('users').select('public_key_x').eq('id', userId).single();
-      if (error) throw error;
-      return data?.public_key_x || null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-/* -------------------------- Contacts API -------------------------- */
-// GET contacts for owner (owner can be email or id)
-app.get('/api/users/contacts', async (req, res) => {
-  const owner = (req.header('x-user') || req.query.owner || '').toString();
+/* ---- Contacts demo endpoints (leave as-is) ---- */
+app.get('/api/users/contacts', (req, res) => {
+  const owner = req.header('x-user') || req.query.owner;
   if (!owner) return res.status(400).json({ error: 'owner missing' });
-
-  // If Supabase is configured, read from DB
-  if (supabase) {
-    try {
-      const ownerId = await ensureUserId(owner);
-      // join to return contact email and nickname
-      const { data, error } = await supabase
-        .from('contacts')
-        .select(`
-          contact_id,
-          nickname,
-          users:contact_id ( email, public_key_x )
-        `)
-        .eq('user_id', ownerId)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-
-      const list = (data || []).map(r => ({
-        id: r.contact_id,
-        email: r.users?.email || '',
-        nickname: r.nickname || null,
-        public_x: r.users?.public_key_x || null,
-      }));
-      return res.json(list);
-    } catch (e) {
-      console.error('GET contacts error:', e);
-      return res.status(500).json({ error: 'failed to fetch contacts' });
-    }
-  }
-
-  // Fallback: in-memory
-  return res.json(contactsByUser.get(owner) || []);
+  res.json(contactsByUser.get(owner) || []);
 });
 
-// POST add contact { owner, email, nickname? }
-app.post('/api/users/contacts', async (req, res) => {
+app.post('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.body.owner;
   const { email, nickname } = req.body || {};
   if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
 
-  if (supabase) {
-    try {
-      const ownerId   = await ensureUserId(owner);
-      const contactId = await ensureUserId(email);
-
-      // upsert unique (user_id, contact_id)
-      const { error } = await supabase
-        .from('contacts')
-        .upsert([{ user_id: ownerId, contact_id: contactId, nickname: nickname || null }], {
-          onConflict: 'user_id,contact_id',
-        });
-      if (error) throw error;
-
-      // return fresh list
-      const { data: rows } = await supabase
-        .from('contacts')
-        .select(`contact_id, nickname, users:contact_id ( email, public_key_x )`)
-        .eq('user_id', ownerId);
-      const list = (rows || []).map(r => ({
-        id: r.contact_id,
-        email: r.users?.email || '',
-        nickname: r.nickname || null,
-        public_x: r.users?.public_key_x || null,
-      }));
-      return res.json(list);
-    } catch (e) {
-      console.error('POST contacts error:', e);
-      return res.status(500).json({ error: 'failed to add contact' });
-    }
-  }
-
-  // Fallback: in-memory
   const list = contactsByUser.get(owner) || [];
   if (!list.find((c) => c.email === email)) list.push({ email, nickname });
   contactsByUser.set(owner, list);
-  return res.json(list);
+  res.json(list);
 });
 
-/* -------------------- health & public key endpoints ---------------- */
+/* ---- health ---- */
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
-app.get('/health',  (_req, res) => res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() }));
+app.get('/health', (_req, res) =>
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() })
+);
 
-app.get('/api/users/public-key', async (req, res) => {
+/* ---- public key lookup ---- */
+app.get('/api/users/public-key', (req, res) => {
   const user = (req.query.user || '').toString();
-  const pub = await getPublicKeyFor(user);
+  const pub = latestPubKeyByUser.get(user) || null;
   console.log(`🔑 Public key request for ${user}:`, pub ? 'Found' : 'Not found');
   res.json({ public_x: pub });
 });
+
+/* ---- demo auth fallbacks for dev (kept in routes/auth.js for real auth) ---- */
+app.post('/api/auth/login', (req, res) => {
+  const { email } = req.body || {};
+  const u = USERS.find((x) => x.email === email);
+  if (!u) return res.status(401).json({ error: 'Invalid credentials' });
+  const token = Buffer.from(`${u.id}.${Date.now()}`).toString('base64');
+  res.json({ user: { id: u.id, email: u.email, name: u.name }, token });
+});
+
+app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }));
 
 /* ----------------------- http + socket.io ------------------------- */
 const httpServer = http.createServer(app);
@@ -257,7 +133,10 @@ async function initRedisAndAdapter() {
     return;
   }
 
-  const needsTLS = REDIS_URL.startsWith('redis://') && /upstash\.io$/i.test(new URL(REDIS_URL).hostname);
+  const needsTLS =
+    REDIS_URL.startsWith('redis://') &&
+    /upstash\.io$/i.test(new URL(REDIS_URL).hostname);
+
   console.log('Connecting Redis & enabling Socket.IO adapter →', redact(REDIS_URL));
   try {
     const pub = createRedisClient({ url: REDIS_URL, socket: needsTLS ? { tls: true } : undefined });
@@ -270,6 +149,7 @@ async function initRedisAndAdapter() {
     await sub.connect();
 
     io.adapter(createAdapter(pub, sub));
+
     redisClient = pub;
     app.locals.redis = redisClient;
 
@@ -294,20 +174,77 @@ async function flushOfflineQueue(userKey, socket) {
   }
 }
 
+/* ---------------- Supabase helpers (optional) --------------------- */
+// cache email -> uuid to avoid frequent lookups
+const userIdCache = new Map();
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function resolveDbUserId(userKey) {
+  if (!supabase) return null;
+  if (!userKey) return null;
+  if (UUID_RE.test(userKey)) return userKey;
+  // treat as email
+  if (userIdCache.has(userKey)) return userIdCache.get(userKey);
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', String(userKey).toLowerCase())
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    const id = data?.id || null;
+    if (id) userIdCache.set(userKey, id);
+    return id;
+  } catch (e) {
+    console.warn('resolveDbUserId failed for', userKey, e?.message || e);
+    return null;
+  }
+}
+
+async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status }) {
+  if (!supabase) return; // run fine in demo without DB
+  try {
+    const sender_uuid = await resolveDbUserId(senderId);
+    const receiver_uuid = await resolveDbUserId(receiverId);
+
+    if (!sender_uuid || !receiver_uuid) {
+      // don’t throw; just log so chat still works
+      console.warn('Skipping DB save (missing uuid):', { senderId, receiverId, sender_uuid, receiver_uuid });
+      return;
+    }
+
+    const row = {
+      sender_id: sender_uuid,
+      receiver_id: receiver_uuid,
+      encrypted_content: encryptedContent,
+      status: status || 'sent',
+      created_at: createdAt || new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from('messages').insert([row]);
+    if (error) throw error;
+  } catch (e) {
+    console.error('❌ persistMessageToSupabase error:', e?.message || e);
+  }
+}
+
 /* --------------------------- socket.io ---------------------------- */
 io.on('connection', (socket) => {
   console.log('🔌 client connected:', socket.id);
 
-  socket.on('user:online', async ({ userId, email, pubX } = {}) => {
+  socket.on('user:online', ({ userId, email, pubX } = {}) => {
     const userKey = userId || email;
     if (!userKey) return;
 
     if (userId) userSocketMap.set(userId, socket.id);
-    if (email)  userSocketMap.set(email, socket.id);
+    if (email)  userSocketMap.set(email,  socket.id);
     socketUserMap.set(socket.id, userKey);
 
     if (pubX) {
-      await setPublicKey(userKey, pubX);
+      if (userId) latestPubKeyByUser.set(userId, pubX);
+      if (email)  latestPubKeyByUser.set(email,  pubX);
       console.log(`🔐 Stored public key for ${userId || ''} / ${email || ''}`);
     }
 
@@ -315,10 +252,9 @@ io.on('connection', (socket) => {
     flushOfflineQueue(userKey, socket).catch(console.error);
   });
 
-  // E2EE message relay + persistence
   socket.on('message:send', async ({ senderId, receiverId, encryptedContent, senderPubX }) => {
     try {
-      const message = {
+      const msg = {
         id: crypto.randomUUID(),
         senderId,
         receiverId,
@@ -327,39 +263,32 @@ io.on('connection', (socket) => {
         createdAt: new Date().toISOString(),
       };
 
-      // Ack to sender
-      socket.emit('message:ack', { messageId: message.id });
+      // Ack to sender immediately
+      socket.emit('message:ack', { messageId: msg.id });
 
-      // Persist to Supabase if available
-      if (supabase) {
-        try {
-          const sId = await ensureUserId(senderId);
-          const rId = await ensureUserId(receiverId);
-          await supabase.from('messages').insert([{
-            id: message.id,
-            sender_id: sId,
-            receiver_id: rId,
-            encrypted_content: message.encryptedContent,
-            sender_pub_x: senderPubX || null,
-            status: 'sent',
-            created_at: message.createdAt,
-          }]);
-        } catch (e) {
-          console.warn('⚠️ message persist failed:', e?.message || e);
-        }
-      }
-
-      // Deliver live (same instance or other instances via adapter)
+      // Deliver (or queue)
+      let statusForDb = 'delivered';
       const recv = userSocketMap.get(receiverId);
       if (recv) {
-        io.to(recv).emit('message:received', message);
+        io.to(recv).emit('message:received', msg);
       } else if (redisClient) {
-        await redisClient.lPush(`offline:${receiverId}`, JSON.stringify(message));
+        await redisClient.lPush(`offline:${receiverId}`, JSON.stringify(msg));
         socket.emit('message:queued', { receiverId });
+        statusForDb = 'queued';
         console.log('⚠️ Receiver offline; queued (Redis)');
       } else {
+        statusForDb = 'sent';
         console.log('⚠️ Receiver offline; not queued (Redis disabled)');
       }
+
+      // Persist to Supabase (best-effort; won’t break chat if it fails)
+      persistMessageToSupabase({
+        senderId,
+        receiverId,
+        encryptedContent,
+        createdAt: msg.createdAt,
+        status: statusForDb,
+      }).catch(() => {});
     } catch (e) {
       console.error('message:send error:', e);
     }
@@ -386,6 +315,7 @@ io.on('connection', (socket) => {
       console.log(`🚀 Server running on http://${HOST}:${PORT}`);
       console.log('🔐 E2EE Chat Backend Ready');
       console.log('Allowed origins:', allowedOrigins);
+      console.log('Supabase persistence:', !!supabase);
     });
   } catch (e) {
     console.error('Server start error:', e);
