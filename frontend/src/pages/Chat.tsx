@@ -9,7 +9,7 @@ import { getPublicKey } from '@/services/api';
 import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
 import MessageBubble from '@/components/MessageBubble';
-import ChatWallpaper from '@/components/ChatWallpaper'; // <-- adjust if you kept it elsewhere
+import ChatWallpaper from '@/components/ChatWallpaper';
 
 type Me = { id: string; email: string };
 type WireMsg = {
@@ -21,10 +21,14 @@ type WireMsg = {
   createdAt?: string;
 };
 type WireCipher = { nonce: string; cipher: string };
+type LocalStatus = 'pending' | 'delivered' | 'failed';
 
 const safeJson = <T,>(s: string | null): T | null => { if (!s) return null; try { return JSON.parse(s) as T; } catch { return null; } };
 const pubXFromContact = (c: Contact): string =>
-  (c as any)?.publicKeys?.public_x || (c as any)?.public_x || (c as any)?.publicKey || '';
+  (c as any)?.publicKeys?.public_x ||
+  (c as any)?.public_x ||
+  (c as any)?.publicKey ||
+  '';
 
 function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
   const [email, setEmail] = useState('');
@@ -51,10 +55,25 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
       onSubmit={submit}
       className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2"
     >
-      <input className="border px-3 py-2 rounded w-[46%] text-sm" placeholder="email@domain" value={email} onChange={(e) => setEmail(e.target.value)} />
-      <input className="border px-3 py-2 rounded w-[38%] text-sm" placeholder="nickname (opt)" value={nick} onChange={(e) => setNick(e.target.value)} />
-      <button className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50" disabled={busy || !email.trim()}>
-        {busy ? 'Adding…' : 'Add'}
+      <input
+        className="border px-3 py-2 rounded w-[46%] text-sm"
+        placeholder="email@domain"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <input
+        className="border px-3 py-2 rounded w-[38%] text-sm"
+        placeholder="nickname (opt)"
+        value={nick}
+        onChange={(e) => setNick(e.target.value)}
+      />
+      <button
+        className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+        aria-label="Add contact"
+        title="Add contact"
+        disabled={busy || !email.trim()}
+      >
+        +
       </button>
       {err && <span className="text-red-600 text-xs ml-2">Failed: {err}</span>}
     </form>
@@ -79,7 +98,9 @@ export default function ChatPage() {
   const [peerPubX, setPeerPubX] = useState('');
 
   const [input, setInput] = useState('');
-  const [items, setItems] = useState<{ from: string; text: string; at: string }[]>([]);
+  const [items, setItems] = useState<
+    { from: string; text: string; at: string; status?: LocalStatus }[]
+  >([]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -87,6 +108,7 @@ export default function ChatPage() {
   const mySecretB64 = (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
   const myPublicB64 = (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
 
+  // presence / pubkey
   useEffect(() => {
     if ((me.id || me.email) && myPublicB64) {
       goOnline(me.id || me.email, me.email, myPublicB64);
@@ -105,7 +127,13 @@ export default function ChatPage() {
       setLoadingContacts(false);
     }
   }
-  useEffect(() => { refreshContacts().catch(console.error); }, [me.id, me.email]);
+
+  // initial + auto refresh every 60s
+  useEffect(() => {
+    refreshContacts().catch(console.error);
+    const t = setInterval(() => refreshContacts().catch(console.error), 60_000);
+    return () => clearInterval(t);
+  }, [me.id, me.email]);
 
   async function choose(c: Contact) {
     const id = c.id || c.email;
@@ -129,6 +157,7 @@ export default function ChatPage() {
     setSidebarOpen(false);
   }
 
+  // inbound / ack handling
   useEffect(() => {
     if (!mySecretB64) return;
 
@@ -147,14 +176,33 @@ export default function ChatPage() {
         const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
 
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text, at: m.createdAt || new Date().toISOString() }]);
+        setItems(prev => [
+          ...prev,
+          { from, text, at: m.createdAt || new Date().toISOString(), status: 'delivered' },
+        ]);
       } catch {
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text: '[encrypted]', at: m.createdAt || new Date().toISOString() }]);
+        setItems(prev => [
+          ...prev,
+          { from, text: '[encrypted]', at: m.createdAt || new Date().toISOString(), status: 'failed' },
+        ]);
       }
     });
 
-    const offAck = onMessageSent(() => {});
+    const offAck = onMessageSent(() => {
+      // mark the LAST pending "Me" message as delivered
+      setItems(prev => {
+        const copy = [...prev];
+        for (let i = copy.length - 1; i >= 0; i--) {
+          if (copy[i].from === 'Me' && (copy[i].status === 'pending' || !copy[i].status)) {
+            copy[i] = { ...copy[i], status: 'delivered' };
+            break;
+          }
+        }
+        return copy;
+      });
+    });
+
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64]);
 
@@ -169,8 +217,27 @@ export default function ChatPage() {
     const sender = me.id || me.email;
     const receiver = peerId || peerEmail;
 
-    sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
-    setItems(prev => [...prev, { from: 'Me', text: plain, at: new Date().toISOString() }]);
+    // optimistic add with pending status
+    setItems(prev => [
+      ...prev,
+      { from: 'Me', text: plain, at: new Date().toISOString(), status: 'pending' as LocalStatus },
+    ]);
+
+    try {
+      sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
+    } catch {
+      // mark last pending as failed
+      setItems(prev => {
+        const copy = [...prev];
+        for (let i = copy.length - 1; i >= 0; i--) {
+          if (copy[i].from === 'Me' && copy[i].status === 'pending') {
+            copy[i] = { ...copy[i], status: 'failed' };
+            break;
+          }
+        }
+        return copy;
+      });
+    }
     setInput('');
   };
 
@@ -182,9 +249,13 @@ export default function ChatPage() {
 
   const sidebar = (
     <div className="h-full flex flex-col">
-      <div className="px-3 py-3 border-b">
-        <div className="text-xs text-slate-600 mb-1">Signed in as</div>
-        <div className="font-medium truncate">{me.email || '—'}</div>
+      <div className="px-3 py-3 border-b flex items-center gap-2">
+        {/* contacts icon */}
+        <span className="w-6 h-6 rounded-full border grid place-content-center">
+          👥
+        </span>
+        <div className="font-medium">Contacts</div>
+        <div className="ml-auto text-xs text-slate-500 truncate">{me.email || '—'}</div>
       </div>
 
       <AddContactForm me={me.id || me.email} onAdded={refreshContacts} />
@@ -213,38 +284,27 @@ export default function ChatPage() {
     </div>
   );
 
-  const headerRight = (
-    <>
-      <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={() => refreshContacts()}>
-        Refresh
-      </button>
-      <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>
-        Sign out
-      </button>
-    </>
-  );
-
   return (
     <AppShell
       title="My Chat"
-      right={headerRight}
+      right={
+        // no Refresh anymore — keeps a sign out only
+        <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>
+          Sign out
+        </button>
+      }
       sidebar={sidebar}
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
     >
       {/* Chat header */}
-      <div className="h-14 bg-white border-b px-4 flex items-center justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
-            {(peerEmail?.[0] || 'U').toUpperCase()}
-          </div>
-          <div className="min-w-0">
-            <div className="font-medium truncate">{peerEmail || '—'}</div>
-            <div className="text-xs text-slate-500 truncate">Encrypted chat</div>
-          </div>
+      <div className="h-14 bg-white border-b px-4 flex items-center gap-3">
+        <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
+          {(peerEmail?.[0] || 'U').toUpperCase()}
         </div>
-        <div className="hidden md:flex items-center gap-2 text-sm text-slate-500">
-          <span className="encryption-badge">E2EE</span>
+        <div className="min-w-0">
+          <div className="font-medium truncate">{peerEmail || '—'}</div>
+          <div className="text-xs text-slate-500 truncate">Encrypted chat</div>
         </div>
       </div>
 
@@ -259,7 +319,7 @@ export default function ChatPage() {
               side={m.from === 'Me' ? 'right' : 'left'}
               text={m.text}
               time={new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              delivered
+              status={m.status}
             />
           ))}
         </div>
@@ -276,6 +336,7 @@ export default function ChatPage() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type a message…"
+          onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
         />
         <button
           className="h-11 px-6 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
