@@ -1,33 +1,28 @@
-export type MessageBubbleProps = {
-  mine?: boolean;
-  text: string;
-  time: string;   // already formatted
-  status?: "sending" | "queued" | "delivered" | "read";
-};
-
+// src/ui/MessageBubble.tsx
 export default function MessageBubble({
-  mine,
+  side, // 'left' | 'right'
   text,
   time,
-  status,
-}: MessageBubbleProps) {
+  delivered,
+}: {
+  side: 'left' | 'right';
+  text: string;
+  time: string;
+  delivered?: boolean;
+}) {
+  const mine = side === 'right';
   return (
-    <div className={`w-full flex ${mine ? "justify-end" : "justify-start"}`}>
+    <div className={`message-bubble w-full flex ${mine ? 'justify-end' : 'justify-start'}`}>
       <div
         className={[
-          "max-w-[75%] rounded-lg px-3 py-2 text-[15px] shadow-sm",
-          mine ? "bg-chat-me" : "bg-chat-them",
-        ].join(" ")}
+          'max-w-[72%] rounded-2xl px-3 py-2 shadow-sm',
+          mine ? 'bg-emerald-100' : 'bg-white',
+        ].join(' ')}
       >
-        <div className="whitespace-pre-wrap break-words">{text}</div>
-
-        <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500 justify-end">
-          <span>{time}</span>
-          {status && (
-            <span className="uppercase tracking-wide">
-              {status === "sending" ? "…" : status}
-            </span>
-          )}
+        <div className="text-[15px] break-words">{text}</div>
+        <div className="mt-1 text-[11px] text-slate-500 flex items-center gap-2">
+          {time}
+          {delivered && <span className="uppercase tracking-wide">Delivered</span>}
         </div>
       </div>
     </div>
