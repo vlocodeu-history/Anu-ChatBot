@@ -1,72 +1,80 @@
-import React from 'react';
+import React from "react";
 
 /**
- * Decorative background for the chat pane.
- * It’s an inline SVG so you don’t need assets/CDN.
- * Subtle opacity keeps bubbles readable.
+ * Elegant repeating patterns (data-URI SVGs).
+ * Variants: "moroccan" | "mini-cross" | "rosette"
+ *
+ * Colors are soft so message text stays readable.
+ * You can tweak stroke/fill by editing the SVG strings below.
  */
-export default function ChatWallpaper() {
+
+type Variant = "moroccan" | "mini-cross" | "rosette";
+
+function svgToDataURI(svg: string) {
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+}
+
+function getPattern(variant: Variant) {
+  // Base tone similar to WhatsApp paper
+  const paper = "#ece5dd";
+
+  switch (variant) {
+    case "moroccan": {
+      // Moroccan lattice / ogee style (very subtle)
+      const svg = `
+        <svg xmlns='http://www.w3.org/2000/svg' width='56' height='56' viewBox='0 0 56 56'>
+          <rect width='56' height='56' fill='${paper}'/>
+          <path d='M28 4c-6 0-9 4-12 7s-6 5-10 5
+                   m44 0c-4 0-7-2-10-5s-6-7-12-7
+                   m0 48c6 0 9-4 12-7s6-5 10-5
+                   m-44 0c4 0 7 2 10 5s6 7 12 7'
+                fill='none' stroke='#cbbfae' stroke-opacity='.55' stroke-width='1.2'/>
+        </svg>`;
+      return { bg: svgToDataURI(svg), base: paper };
+    }
+
+    case "mini-cross": {
+      // Small plus/cross grid with gentle fade vibe
+      const svg = `
+        <svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'>
+          <rect width='22' height='22' fill='${paper}'/>
+          <g stroke='#c4beb5' stroke-opacity='.45' stroke-width='1'>
+            <path d='M11 6 v2'/>
+            <path d='M11 14 v2'/>
+            <path d='M6 11 h2'/>
+            <path d='M14 11 h2'/>
+          </g>
+        </svg>`;
+      return { bg: svgToDataURI(svg), base: paper };
+    }
+
+    case "rosette": {
+      // Small rosette/flower motif
+      const svg = `
+        <svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'>
+          <rect width='40' height='40' fill='${paper}'/>
+          <g fill='none' stroke='#d0c6b8' stroke-width='1' stroke-opacity='.55'>
+            <circle cx='20' cy='20' r='5'/>
+            <path d='M20 10 v-3 M20 33 v-3 M10 20 h-3 M33 20 h-3'/>
+            <path d='M14 14 l-2-2 M28 28 l-2-2 M14 26 l-2 2 M28 12 l-2 2'/>
+          </g>
+        </svg>`;
+      return { bg: svgToDataURI(svg), base: paper };
+    }
+  }
+}
+
+export default function ChatWallpaper({ variant = "moroccan" }: { variant?: Variant }) {
+  const { bg } = getPattern(variant);
   return (
-    <svg
-      className="pointer-events-none absolute inset-0 w-full h-full opacity-25"
-      viewBox="0 0 1440 900"
-      preserveAspectRatio="none"
+    <div
+      className="pointer-events-none absolute inset-0 opacity-30"
+      style={{
+        backgroundImage: bg,
+        backgroundRepeat: "repeat",
+        backgroundSize: "auto",
+      }}
       aria-hidden="true"
-    >
-      {/* Base tint */}
-      <rect width="1440" height="900" fill="#ece5dd" />
-
-      {/* Organic blobs */}
-      <g>
-        <defs>
-          <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#f7c8b4" />
-            <stop offset="100%" stopColor="#f2b79f" />
-          </linearGradient>
-          <linearGradient id="g2" x1="1" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#d8e9e4" />
-            <stop offset="100%" stopColor="#bfe0d7" />
-          </linearGradient>
-          <linearGradient id="g3" x1="0" y1="1" x2="1" y2="0">
-            <stop offset="0%" stopColor="#e5d3c8" />
-            <stop offset="100%" stopColor="#dac2b4" />
-          </linearGradient>
-        </defs>
-
-        <path
-          d="M0,120 C200,60 320,140 420,120 C540,95 640,20 760,60 C910,110 980,260 1140,260 C1250,260 1340,210 1440,140 L1440,0 L0,0 Z"
-          fill="url(#g1)"
-          opacity="0.35"
-        />
-        <path
-          d="M0,900 L0,720 C130,760 250,720 360,660 C510,580 620,560 760,600 C980,660 1120,610 1240,540 C1310,500 1390,460 1440,470 L1440,900 Z"
-          fill="url(#g2)"
-          opacity="0.35"
-        />
-        <path
-          d="M1080,0 C1160,120 1220,200 1320,260 C1380,300 1410,330 1440,360 L1440,0 Z"
-          fill="url(#g3)"
-          opacity="0.35"
-        />
-      </g>
-
-      {/* Minimal leaves/dots */}
-      <g opacity="0.55">
-        {/* stems */}
-        <path d="M170 520 C 210 460, 260 460, 300 520" stroke="#9ac8bd" strokeWidth="6" fill="none" />
-        <path d="M240 560 C 280 500, 330 500, 370 560" stroke="#f1b266" strokeWidth="6" fill="none" />
-
-        {/* leaves */}
-        <ellipse cx="230" cy="505" rx="8" ry="18" fill="#4fa58a" />
-        <ellipse cx="260" cy="490" rx="8" ry="18" fill="#4fa58a" transform="rotate(-25 260 490)" />
-        <ellipse cx="285" cy="495" rx="8" ry="18" fill="#4fa58a" transform="rotate(20 285 495)" />
-        <ellipse cx="315" cy="510" rx="8" ry="18" fill="#4fa58a" transform="rotate(-10 315 510)" />
-
-        {/* dots */}
-        <circle cx="1000" cy="150" r="6" fill="#6ac3aa" />
-        <circle cx="1030" cy="165" r="5" fill="#6ac3aa" />
-        <circle cx="1010" cy="185" r="4" fill="#6ac3aa" />
-      </g>
-    </svg>
+    />
   );
 }
