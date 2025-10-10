@@ -5,6 +5,7 @@
 @layer base {
   :root{
     --chat-paper: #ece5dd; /* WhatsApp-like paper tone */
+     --chat-paper: #ece5dd; 
   }
   body {
     @apply antialiased bg-slate-50 text-slate-900;
