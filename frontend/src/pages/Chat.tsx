@@ -10,7 +10,7 @@ import { getPublicKey } from '@/services/api';
 import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
 import MessageBubble from '@/components/MessageBubble';
-import ChatWallpaper from '@/components/ChatWallpaper';
+import ChatWallpaper from '@/ui/ChatWallpaper';
 
 const BUILD_TAG = 'v4-no-refresh'; // <-- shows in header so you can confirm
 
