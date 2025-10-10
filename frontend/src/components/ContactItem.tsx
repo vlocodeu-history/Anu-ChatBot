@@ -1,18 +1,14 @@
 import React from 'react';
 
-export default function ContactItem({
-  title,
-  subtitle,
-  active,
-  onClick,
-}: {
+type Props = {
   title: string;
   subtitle?: string;
   active?: boolean;
-  onClick?: () => void;
-}) {
-  const initial = (title?.[0] || subtitle?.[0] || 'U').toUpperCase();
+  onClick?(): void;
+};
 
+export default function ContactItem({ title, subtitle, active, onClick }: Props) {
+  const initial = (title?.[0] || 'U').toUpperCase();
   return (
     <li
       className={`px-3 py-3 cursor-pointer border-b hover:bg-emerald-50 ${
@@ -21,8 +17,7 @@ export default function ContactItem({
       onClick={onClick}
     >
       <div className="flex items-center gap-3">
-        {/* avatar */}
-        <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
+        <div className="w-9 h-9 rounded-full border grid place-content-center text-sm">
           {initial}
         </div>
         <div className="min-w-0">
