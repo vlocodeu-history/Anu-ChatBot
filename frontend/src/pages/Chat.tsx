@@ -5,6 +5,7 @@ import { getContacts, addContact, type Contact } from '@/services/contacts';
 import { onReceiveMessage, onMessageSent, sendEncryptedMessage, goOnline } from '@/services/socket';
 import { loadOrCreateKeypair, sharedKeyWith, encrypt, decrypt } from '@/services/e2ee';
 import { getPublicKey } from '@/services/api';
+import ChatWallpaper from '@/ui/ChatWallpaper';
 
 type Me = { id: string; email: string };
 type WireMsg = {
@@ -17,44 +18,18 @@ type WireMsg = {
 };
 type WireCipher = { nonce: string; cipher: string };
 
-const safeJson = <T,>(s: string | null): T | null => {
-  if (!s) return null;
-  try { return JSON.parse(s) as T; } catch { return null; }
-};
-
+const safeJson = <T,>(s: string | null): T | null => { if (!s) return null; try { return JSON.parse(s) as T; } catch { return null; } };
 const pubXFromContact = (c: Contact): string =>
   (c as any)?.publicKeys?.public_x ||
   (c as any)?.public_x ||
   (c as any)?.publicKey ||
   '';
 
-/* --------------------------- small components --------------------------- */
-
-function TopBar({ meEmail, onSignOut, onRefresh }: {
-  meEmail: string;
-  onSignOut: () => void;
-  onRefresh: () => void;
-}) {
-  return (
-    <header className="h-14 bg-emerald-600 text-white flex items-center justify-between px-4 shadow-sm">
-      <div className="font-semibold">My Chat</div>
-      <div className="flex items-center gap-2">
-        <button onClick={onRefresh} className="px-3 py-1 rounded bg-emerald-500 hover:bg-emerald-400">
-          Refresh
-        </button>
-        <button onClick={onSignOut} className="px-3 py-1 rounded bg-white/10 hover:bg-white/20">
-          Sign out
-        </button>
-      </div>
-    </header>
-  );
-}
-
 function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
   const [email, setEmail] = useState('');
-  const [nick, setNick]   = useState('');
-  const [busy, setBusy]   = useState(false);
-  const [err,  setErr]    = useState<string | null>(null);
+  const [nick, setNick] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,75 +46,29 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="p-3 border-b bg-white/70 backdrop-blur sticky top-0 z-10"
-    >
-      <div className="flex flex-wrap sm:flex-nowrap gap-2">
-        <input
-          className="border rounded px-2 py-1 flex-1 min-w-0"
-          placeholder="email@domain"
-          value={email}
-          onChange={(e)=>setEmail(e.target.value)}
-        />
-        <input
-          className="border rounded px-2 py-1 flex-1 min-w-0"
-          placeholder="nickname (opt)"
-          value={nick}
-          onChange={(e)=>setNick(e.target.value)}
-        />
-        <button
-          className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
-          disabled={busy || !email.trim()}
-        >
-          {busy ? 'Adding…' : 'Add'}
-        </button>
-      </div>
-      {err && <div className="text-red-600 text-xs mt-1">Failed: {err}</div>}
+    <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2">
+      <input
+        className="border px-3 py-2 rounded w-[46%] text-sm"
+        placeholder="email@domain"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <input
+        className="border px-3 py-2 rounded w-[38%] text-sm"
+        placeholder="nickname (opt)"
+        value={nick}
+        onChange={(e) => setNick(e.target.value)}
+      />
+      <button
+        className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+        disabled={busy || !email.trim()}
+      >
+        {busy ? 'Adding…' : 'Add'}
+      </button>
+      {err && <span className="text-red-600 text-xs ml-2">Failed: {err}</span>}
     </form>
   );
 }
-
-function ContactItem({ c, active, onClick }: {
-  c: Contact;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const name = c.nickname || c.email;
-  return (
-    <li
-      onClick={onClick}
-      className={[
-        'px-3 py-2 cursor-pointer border-b hover:bg-emerald-50',
-        active ? 'bg-emerald-100 font-medium' : 'bg-white'
-      ].join(' ')}
-    >
-      <div className="text-sm">{name}</div>
-      <div className="text-xs text-gray-500">{c.email}</div>
-    </li>
-  );
-}
-
-function MessageBubble({ fromMe, text, at, status }: {
-  fromMe: boolean;
-  text: string;
-  at: string;
-  status?: string;
-}) {
-  return (
-    <div className={`message-bubble max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
-      fromMe ? 'ml-auto bg-emerald-100' : 'mr-auto bg-white'
-    }`}>
-      <div className="whitespace-pre-wrap">{text}</div>
-      <div className="mt-1 text-[11px] text-gray-500 flex items-center gap-2">
-        <span>{new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-        {status && <span className="uppercase tracking-wide">{status}</span>}
-      </div>
-    </div>
-  );
-}
-
-/* --------------------------------- page --------------------------------- */
 
 export default function ChatPage() {
   const navigate = useNavigate();
@@ -147,6 +76,7 @@ export default function ChatPage() {
   const token = localStorage.getItem('token') || '';
   const me = safeJson<Me>(localStorage.getItem('me')) || { id: '', email: '' };
 
+  // if unauthenticated, go to login
   useEffect(() => {
     if (!token || (!me.id && !me.email)) navigate('/login', { replace: true });
   }, [token, me.id, me.email, navigate]);
@@ -159,14 +89,13 @@ export default function ChatPage() {
   const [peerPubX, setPeerPubX] = useState('');
 
   const [input, setInput] = useState('');
-  const [items, setItems] = useState<{ from: string; text: string; at: string; status?: string }[]>([]);
+  const [items, setItems] = useState<{ from: string; text: string; at: string }[]>([]);
 
   const myKeys = useMemo(() => loadOrCreateKeypair(), []);
-  const mySecretB64 =
-    (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
-  const myPublicB64 =
-    (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
+  const mySecretB64 = (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
+  const myPublicB64 = (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
 
+  // Register presence (and my latest public key) with server
   useEffect(() => {
     if ((me.id || me.email) && myPublicB64) {
       goOnline(me.id || me.email, me.email, myPublicB64);
@@ -178,10 +107,9 @@ export default function ChatPage() {
     setLoadingContacts(true);
     try {
       const raw = await getContacts(me.id || me.email);
-      const list: Contact[] = Array.isArray(raw)
-        ? raw
-        : Array.isArray((raw as any)?.contacts) ? (raw as any).contacts : [];
+      const list: Contact[] = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.contacts) ? (raw as any).contacts : [];
       setContacts(list);
+      // auto-select first contact to fetch their public key (enables Send)
       if (!peerId && list.length) await choose(list[0]);
     } finally {
       setLoadingContacts(false);
@@ -194,10 +122,7 @@ export default function ChatPage() {
     setPeerId(id);
     setPeerEmail(c.email);
 
-    let key =
-      pubXFromContact(c) ||
-      localStorage.getItem(`pubkey:${id}`) ||
-      '';
+    let key = pubXFromContact(c) || localStorage.getItem(`pubkey:${id}`) || '';
 
     if (!key) {
       try {
@@ -211,7 +136,7 @@ export default function ChatPage() {
       }
     }
 
-    setPeerPubX(key);
+    setPeerPubX(key);  // if still empty → Send will stay disabled
     setItems([]);
   }
 
@@ -233,7 +158,7 @@ export default function ChatPage() {
         const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
 
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text, at: m.createdAt || new Date().toISOString(), status: 'DELIVERED' }]);
+        setItems(prev => [...prev, { from, text, at: m.createdAt || new Date().toISOString() }]);
       } catch {
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
         setItems(prev => [...prev, { from, text: '[encrypted]', at: m.createdAt || new Date().toISOString() }]);
@@ -256,7 +181,7 @@ export default function ChatPage() {
     const receiver = peerId || peerEmail;
 
     sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
-    setItems(prev => [...prev, { from: 'Me', text: plain, at: new Date().toISOString(), status: 'DELIVERED' }]);
+    setItems(prev => [...prev, { from: 'Me', text: plain, at: new Date().toISOString() }]);
     setInput('');
   };
 
@@ -267,76 +192,87 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-emerald-50">
-      <TopBar meEmail={me.email} onSignOut={signOut} onRefresh={() => refreshContacts()} />
+    <div className="h-screen w-full flex flex-col bg-slate-50">
+      {/* Top Bar */}
+      <div className="flex items-center justify-between px-4 h-14 bg-emerald-700 text-white">
+        <div className="font-semibold">My Chat</div>
+        <div className="flex gap-2">
+          <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={() => refreshContacts()}>Refresh</button>
+          <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>Sign out</button>
+        </div>
+      </div>
 
-      {/* 2-column grid prevents any overlap – no z-index hacks needed */}
-      <div className="grid grid-cols-[320px_1fr] h-[calc(100vh-56px)]">
+      {/* Body */}
+      <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
-        <aside className="border-r bg-white flex flex-col overflow-hidden">
-          <div className="px-3 py-2 text-sm text-gray-600">
-            <div className="text-gray-500">Signed in as</div>
-            <div className="font-semibold truncate">{me.email || '—'}</div>
-          </div>
+        <aside className="w-[320px] shrink-0 border-r bg-white relative overflow-hidden">
+          <div className="px-3 py-2 text-xs text-slate-600">Signed in as</div>
+          <div className="px-3 pb-2 font-medium">{me.email || '—'}</div>
 
           <AddContactForm me={me.id || me.email} onAdded={refreshContacts} />
 
-          <ul className="flex-1 overflow-y-auto scrollbar-thin">
-            {loadingContacts && <li className="px-3 py-2 text-sm text-gray-500">Loading…</li>}
-            {!loadingContacts && !contacts.length && <li className="px-3 py-2 text-sm text-gray-500">No contacts</li>}
-            {contacts.map(c => (
-              <ContactItem
-                key={c.id || c.email}
-                c={c}
-                active={(c.id || c.email) === (peerId || peerEmail)}
-                onClick={() => choose(c)}
-              />
-            ))}
+          <ul className="overflow-auto h-[calc(100%-110px)]">
+            {loadingContacts && <li className="px-3 py-2 text-sm text-slate-500">Loading…</li>}
+            {!loadingContacts && !contacts.length && <li className="px-3 py-2 text-sm text-slate-500">No contacts</li>}
+            {contacts.map((c) => {
+              const id = c.id || c.email;
+              const active = id === (peerId || peerEmail);
+              return (
+                <li
+                  key={id}
+                  className={`px-3 py-3 cursor-pointer border-b hover:bg-emerald-50 ${active ? 'bg-emerald-100/60' : ''}`}
+                  onClick={() => choose(c)}
+                >
+                  <div className="text-sm font-medium">{c.nickname || c.email}</div>
+                  <div className="text-xs text-slate-500">{c.email}</div>
+                </li>
+              );
+            })}
           </ul>
         </aside>
 
-        {/* Chat pane */}
-        <section className="flex flex-col">
+        {/* Chat Pane */}
+        <section className="flex-1 flex flex-col">
           {/* Chat header */}
-          <div className="h-12 flex items-center justify-between px-4 border-b bg-white">
+          <div className="h-12 border-b bg-white flex items-center justify-between px-4">
             <div className="font-medium">{peerEmail || '—'}</div>
           </div>
 
           {/* Messages area with wallpaper */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 chat-wallpaper scrollbar-thin">
-            <div className="mx-auto max-w-3xl space-y-3">
+          <div className="relative flex-1 overflow-auto bg-[#ece5dd]">
+            <ChatWallpaper /> {/* ← the pretty pattern */}
+            <div className="relative z-10 p-5 space-y-2">
               {items.length === 0 && (
-                <div className="text-gray-500 text-sm text-center mt-10">No messages yet.</div>
+                <div className="text-center text-slate-500 mt-16">No messages yet.</div>
               )}
               {items.map((m, i) => (
-                <MessageBubble
-                  key={i}
-                  fromMe={m.from === 'Me'}
-                  text={m.text}
-                  at={m.at}
-                  status={m.status}
-                />
+                <div key={i} className={`message-bubble max-w-[70%] ${m.from === 'Me' ? 'ml-auto' : ''}`}>
+                  <div className={`rounded-xl px-3 py-2 shadow-sm ${m.from === 'Me' ? 'bg-emerald-100' : 'bg-white'}`}>
+                    <div className="text-[15px]">{m.text}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} <span className="ml-2">DELIVERED</span>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
 
-          {/* Input */}
-          <div className="border-t bg-white p-3">
-            <div className="mx-auto max-w-3xl flex gap-2">
-              <input
-                className="border rounded-full px-4 h-10 flex-1"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a message…"
-              />
-              <button
-                className="h-10 px-5 rounded-full bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
-                onClick={send}
-                disabled={!peerEmail || !peerPubX}
-              >
-                Send
-              </button>
-            </div>
+          {/* Composer */}
+          <div className="h-[72px] border-t bg-white flex items-center gap-2 px-4">
+            <input
+              className="flex-1 h-11 rounded-full px-4 border focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Type a message…"
+            />
+            <button
+              className="h-11 px-5 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
+              onClick={send}
+              disabled={!peerEmail || !peerPubX}
+            >
+              Send
+            </button>
           </div>
         </section>
       </div>
