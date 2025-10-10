@@ -1,4 +1,3 @@
-// src/ui/AppShell.tsx
 import { ReactNode } from 'react';
 
 export default function AppShell({
@@ -18,7 +17,7 @@ export default function AppShell({
 }) {
   return (
     <div className="h-screen w-full flex flex-col bg-slate-50">
-      {/* Header (Metronic-like toolbar) */}
+      {/* Top bar */}
       <header className="h-14 shrink-0 bg-emerald-700 text-white">
         <div className="h-full max-w-7xl mx-auto px-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -45,7 +44,7 @@ export default function AppShell({
         )}
 
         <div className="h-full w-full flex">
-          {/* Sidebar panel */}
+          {/* Sidebar */}
           <aside
             className={[
               'absolute md:static z-20 h-full bg-white border-r transition-all duration-300 shadow md:shadow-none',
@@ -55,7 +54,7 @@ export default function AppShell({
             {sidebar}
           </aside>
 
-          {/* Main content */}
+          {/* Main */}
           <main className="flex-1 min-w-0">{children}</main>
         </div>
       </div>
