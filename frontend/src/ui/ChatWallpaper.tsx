@@ -1,23 +1,13 @@
 import React from 'react';
 
 type Props = {
-  /** pick one: 'moroccan' | 'dots' | 'leafy' */
   variant?: 'moroccan' | 'dots' | 'leafy';
-  /** overall opacity (0..1) */
   opacity?: number;
 };
 
-/**
- * Non-interactive decorative wallpaper for the chat pane.
- * Renders an inline SVG pattern so there are no external assets / CORS issues.
- */
 export default function ChatWallpaper({ variant = 'moroccan', opacity = 0.22 }: Props) {
   return (
-    <div
-      aria-hidden
-      className="pointer-events-none absolute inset-0 z-0"
-      style={{ opacity }}
-    >
+    <div aria-hidden className="pointer-events-none absolute inset-0 z-0" style={{ opacity }}>
       {variant === 'moroccan' && <Moroccan />}
       {variant === 'dots' && <Dots />}
       {variant === 'leafy' && <Leafy />}
@@ -25,10 +15,7 @@ export default function ChatWallpaper({ variant = 'moroccan', opacity = 0.22 }: 
   );
 }
 
-/* --- Variants ---------------------------------------------------- */
-
 function Moroccan() {
-  // light-beige paper tone like WhatsApp
   return (
     <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
       <defs>
