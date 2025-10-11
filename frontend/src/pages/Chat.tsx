@@ -1,19 +1,18 @@
-// src/pages/Chat.tsx
+// frontend/src/pages/Chat.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { getContacts, addContact, type Contact } from '@/services/contacts';
+import { getContacts, addContact, removeContact, type Contact } from '@/services/contacts';
 import { onReceiveMessage, onMessageSent, sendEncryptedMessage, goOnline } from '@/services/socket';
 import { loadOrCreateKeypair, sharedKeyWith, encrypt, decrypt } from '@/services/e2ee';
-import { getPublicKey } from '@/services/api';
+import { getPublicKey, getMessages } from '@/services/api';
 
 import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
 import MessageBubble from '@/components/MessageBubble';
+import ChatWallpaper from '@/components/ChatWallpaper';
 import MessageInput from '@/components/MessageInput';
-import LiquidEther from '@/components/LiquidEther'; // ← animated background
-
-const BUILD_TAG = 'v4-no-refresh';
+import LiquidEther from '@/components/LiquidEther'; // you already added this file earlier
 
 type Me = { id: string; email: string };
 type WireMsg = {
@@ -21,32 +20,19 @@ type WireMsg = {
   senderId: string;
   receiverId: string;
   encryptedContent: string; // {"nonce":"...","cipher":"..."}
-  senderPubX?: string;       // sender's X25519 public key (base64)
+  senderPubX?: string;
   createdAt?: string;
 };
 type WireCipher = { nonce: string; cipher: string };
 type LocalStatus = 'pending' | 'delivered' | 'failed';
 
-const safeJson = <T,>(s: string | null): T | null => {
-  if (!s) return null;
-  try { return JSON.parse(s) as T; } catch { return null; }
-};
-
+const safeJson = <T,>(s: string | null): T | null => { if (!s) return null; try { return JSON.parse(s) as T; } catch { return null; } };
 const pubXFromContact = (c: Contact): string =>
-  (c as any)?.publicKeys?.public_x ||
-  (c as any)?.public_x ||
-  (c as any)?.publicKey ||
-  '';
+  (c as any)?.publicKeys?.public_x || (c as any)?.public_x || (c as any)?.publicKey || '';
 
-/** Normalize b64 (trim, remove stray quotes/spaces) */
 const norm = (b64?: string | null) => (b64 || '').replace(/\s+/g, '').replace(/^"+|"+$/g, '');
 
-/** Try decrypting with the first good shared key. */
-function tryDecryptWithAny(
-  payload: WireCipher | null,
-  mySecretB64: string,
-  candidatePubKeys: Array<string | undefined | null>
-): string | null {
+function tryDecryptWithAny(payload: WireCipher | null, mySecretB64: string, candidatePubKeys: Array<string | undefined | null>): string | null {
   if (!payload || !payload.nonce || !payload.cipher) return null;
   for (const k of candidatePubKeys) {
     const pk = norm(k);
@@ -55,9 +41,7 @@ function tryDecryptWithAny(
       const shared = sharedKeyWith(pk, mySecretB64);
       const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
       return text;
-    } catch {
-      // keep trying
-    }
+    } catch {}
   }
   return null;
 }
@@ -83,37 +67,29 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
   };
 
   return (
-    <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2">
-      <input
-        className="border px-3 py-2 rounded w-[46%] text-sm"
-        placeholder="email@domain"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <input
-        className="border px-3 py-2 rounded w-[38%] text-sm"
-        placeholder="nickname (op)"
-        value={nick}
-        onChange={(e) => setNick(e.target.value)}
-      />
-      <button
-        className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
-        aria-label="Add contact"
-        title="Add contact"
-        disabled={busy || !email.trim()}
-      >
-        +
-      </button>
-      {err && <span className="text-red-600 text-xs ml-2">Failed: {err}</span>}
+    <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b dark:border-slate-800 px-3 py-3 flex gap-2">
+      <input className="border dark:border-slate-700 px-3 py-2 rounded w-[46%] text-sm bg-white dark:bg-slate-900"
+             placeholder="email@domain" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <input className="border dark:border-slate-700 px-3 py-2 rounded w-[38%] text-sm bg-white dark:bg-slate-900"
+             placeholder="nickname (op)" value={nick} onChange={(e) => setNick(e.target.value)} />
+      <button className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+              aria-label="Add contact" title="Add contact" disabled={busy || !email.trim()}>+</button>
+      {err && <span className="text-red-500 text-xs ml-2">Failed: {err}</span>}
     </form>
   );
 }
 
 export default function ChatPage() {
   const navigate = useNavigate();
-
   const token = localStorage.getItem('token') || '';
   const me = safeJson<Me>(localStorage.getItem('me')) || { id: '', email: '' };
+
+  // THEME
+  const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark);
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  }, [dark]);
 
   useEffect(() => {
     if (!token || (!me.id && !me.email)) navigate('/login', { replace: true });
@@ -121,14 +97,13 @@ export default function ChatPage() {
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(false);
+  const [filter, setFilter] = useState('');
 
   const [peerId, setPeerId] = useState('');
   const [peerEmail, setPeerEmail] = useState('');
   const [peerPubX, setPeerPubX] = useState('');
 
-  const [items, setItems] = useState<
-    { from: string; text: string; at: string; status?: LocalStatus }[]
-  >([]);
+  const [items, setItems] = useState<{ from: string; text: string; at: string; status?: LocalStatus }[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const myKeys = useMemo(() => loadOrCreateKeypair(), []);
@@ -137,9 +112,7 @@ export default function ChatPage() {
 
   // Announce presence + latest key
   useEffect(() => {
-    if ((me.id || me.email) && myPublicB64) {
-      goOnline(me.id || me.email, me.email, myPublicB64);
-    }
+    if ((me.id || me.email) && myPublicB64) goOnline(me.id || me.email, me.email, myPublicB64);
   }, [myPublicB64, me.id, me.email]);
 
   async function refreshContacts() {
@@ -154,12 +127,33 @@ export default function ChatPage() {
       setLoadingContacts(false);
     }
   }
-
   useEffect(() => {
     refreshContacts().catch(console.error);
     const t = setInterval(() => refreshContacts().catch(console.error), 60_000);
     return () => clearInterval(t);
   }, [me.id, me.email]);
+
+  async function loadHistory(peerEmailOrId: string) {
+    try {
+      const history = await getMessages(me.id || me.email, peerEmailOrId);
+      const mapped = history.map((m) => {
+        const payload = safeJson<WireCipher>(m.encryptedContent);
+        const candidates = [
+          peerPubX,
+          localStorage.getItem(`pubkey:${m.senderId}`),
+          localStorage.getItem(`pubkey:${m.receiverId}`),
+          localStorage.getItem(`pubkey:${peerEmail}`),
+        ];
+        let text: string | null = null;
+        try { text = tryDecryptWithAny(payload, mySecretB64, candidates); } catch {}
+        const from = [me.id, me.email].includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
+        return { from, text: text ?? '[encrypted]', at: m.createdAt, status: text ? 'delivered' : 'failed' };
+      });
+      setItems(mapped);
+    } catch {
+      setItems([]);
+    }
+  }
 
   async function choose(c: Contact) {
     const id = c.id || c.email;
@@ -178,13 +172,12 @@ export default function ChatPage() {
         console.warn('public key lookup failed', e);
       }
     }
-
     setPeerPubX(key);
-    setItems([]);
     setSidebarOpen(false);
+    await loadHistory(id);
   }
 
-  // Receive + robust decrypt
+  // Receive + decrypt
   useEffect(() => {
     if (!mySecretB64) return;
 
@@ -193,48 +186,27 @@ export default function ChatPage() {
       const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
       if (!involvesMe) return;
 
-      // cache the latest public key we see for this sender
-      if (m.senderPubX) {
-        try { localStorage.setItem(`pubkey:${m.senderId}`, m.senderPubX); } catch {}
-      }
-
       const isFromMe = myIds.includes(m.senderId);
       const payload = safeJson<WireCipher>(m.encryptedContent);
-
-      // Try multiple candidate pubkeys
       const candidates = [
-        m.senderPubX,                                   // provided by sender
-        peerPubX,                                       // current peer key
-        localStorage.getItem(`pubkey:${m.senderId}`),   // cached by sender id
-        localStorage.getItem(`pubkey:${m.receiverId}`), // cached by receiver (sometimes ids swap email/uuid)
-        localStorage.getItem(`pubkey:${peerEmail}`),    // cached by email
+        m.senderPubX,
+        peerPubX,
+        localStorage.getItem(`pubkey:${m.senderId}`),
+        localStorage.getItem(`pubkey:${m.receiverId}`),
+        localStorage.getItem(`pubkey:${peerEmail}`),
       ];
-
       let text: string | null = null;
-      if (!isFromMe) {
-        text = tryDecryptWithAny(payload, mySecretB64, candidates);
-      }
+      if (!isFromMe) text = tryDecryptWithAny(payload, mySecretB64, candidates);
 
       const from = isFromMe ? 'Me' : (peerEmail || m.senderId);
-      setItems(prev => [
-        ...prev,
-        {
-          from,
-          text: text ?? '[encrypted]',
-          at: m.createdAt || new Date().toISOString(),
-          status: text ? 'delivered' : 'failed',
-        },
-      ]);
+      setItems(prev => [...prev, { from, text: text ?? '[encrypted]', at: m.createdAt || new Date().toISOString(), status: text ? 'delivered' : 'failed' }]);
     });
 
     const offAck = onMessageSent(() => {
       setItems(prev => {
         const copy = [...prev];
         for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].from === 'Me' && (copy[i].status === 'pending' || !copy[i].status)) {
-            copy[i] = { ...copy[i], status: 'delivered' };
-            break;
-          }
+          if (copy[i].from === 'Me' && (copy[i].status === 'pending' || !copy[i].status)) { copy[i] = { ...copy[i], status: 'delivered' }; break; }
         }
         return copy;
       });
@@ -255,18 +227,11 @@ export default function ChatPage() {
     const receiver = peerId || peerEmail;
 
     setItems(prev => [...prev, { from: 'Me', text, at: new Date().toISOString(), status: 'pending' }]);
-    try {
-      // include my latest public key so the receiver can always derive the same shared secret
-      sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
-    } catch {
+    try { sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64); }
+    catch {
       setItems(prev => {
         const copy = [...prev];
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].from === 'Me' && copy[i].status === 'pending') {
-            copy[i] = { ...copy[i], status: 'failed' };
-            break;
-          }
-        }
+        for (let i = copy.length - 1; i >= 0; i--) { if (copy[i].from === 'Me' && copy[i].status === 'pending') { copy[i] = { ...copy[i], status: 'failed' }; break; } }
         return copy;
       });
     }
@@ -278,9 +243,14 @@ export default function ChatPage() {
     navigate('/login', { replace: true });
   };
 
+  const filtered = filter.trim()
+    ? contacts.filter(c => (c.nickname || c.email).toLowerCase().includes(filter.toLowerCase()))
+    : contacts;
+
   const sidebar = (
     <div className="h-full flex flex-col">
-      <div className="px-3 py-3 border-b flex items-center gap-2">
+      <div className="px-3 py-3 border-b dark:border-slate-800 flex items-center gap-2">
+        <button className="mr-2 text-xl" onClick={() => setSidebarOpen(s => !s)} title="Collapse/Expand">≡</button>
         <span className="w-6 h-6 rounded-full border grid place-content-center">👥</span>
         <div className="font-medium">Contacts</div>
         <div className="ml-auto text-xs text-slate-500 truncate">{me.email || '—'}</div>
@@ -288,24 +258,33 @@ export default function ChatPage() {
 
       <AddContactForm me={me.id || me.email} onAdded={refreshContacts} />
 
-      <div className="px-3 py-2 border-b bg-slate-50">
-        <input className="w-full border rounded px-3 py-2 text-sm" placeholder="Search contacts…" onChange={() => {}} />
+      <div className="px-3 py-2 border-b bg-slate-50 dark:bg-slate-900 dark:border-slate-800">
+        <input className="w-full border dark:border-slate-700 rounded px-3 py-2 text-sm bg-white dark:bg-slate-900"
+               placeholder="Search contacts…" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
 
       <ul className="overflow-auto flex-1">
         {loadingContacts && <li className="px-3 py-3 text-sm text-slate-500">Loading…</li>}
-        {!loadingContacts && !contacts.length && <li className="px-3 py-3 text-sm text-slate-500">No contacts</li>}
-        {contacts.map((c) => {
+        {!loadingContacts && !filtered.length && <li className="px-3 py-3 text-sm text-slate-500">No contacts</li>}
+        {filtered.map((c) => {
           const id = c.id || c.email;
           const active = id === (peerId || peerEmail);
           return (
-            <ContactItem
-              key={id}
-              title={c.nickname || c.email}
-              subtitle={c.email}
-              active={active}
-              onClick={() => choose(c)}
-            />
+            <div key={id} className="flex items-center">
+              <ContactItem
+                title={c.nickname || c.email}
+                subtitle={c.email}
+                active={active}
+                onClick={() => choose(c)}
+              />
+              <button
+                className="ml-auto mr-2 text-slate-400 hover:text-red-600"
+                title="Delete contact"
+                onClick={async (e) => { e.stopPropagation(); await removeContact(me.id || me.email, c.email); await refreshContacts(); }}
+              >
+                ✕
+              </button>
+            </div>
           );
         })}
       </ul>
@@ -314,18 +293,21 @@ export default function ChatPage() {
 
   return (
     <AppShell
-      title={`My Chat • ${BUILD_TAG}`}
+      title="My Chat"
       right={
-        <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>
-          Sign out
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="px-2 py-1 rounded border dark:border-slate-700" onClick={() => setDark(d => !d)}>
+            {dark ? 'Light' : 'Dark'}
+          </button>
+          <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>Sign out</button>
+        </div>
       }
       sidebar={sidebar}
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
     >
       {/* Chat header */}
-      <div className="h-14 bg-white border-b px-4 flex items-center gap-3">
+      <div className="h-14 bg-white dark:bg-slate-900 border-b dark:border-slate-800 px-4 flex items-center gap-3">
         <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
           {(peerEmail?.[0] || 'U').toUpperCase()}
         </div>
@@ -335,9 +317,9 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages + Liquid Ether background */}
-      <div className="relative flex-1 overflow-auto bg-[var(--chat-paper,#ece5dd)]">
-        <LiquidEther intensity={0.7} /> {/* ← increase “blob” opacity here */}
+      {/* Messages with background (increase opacity to ~0.7) */}
+      <div className="relative flex-1 overflow-auto bg-chat-bg dark:bg-slate-950">
+        <LiquidEther className="opacity-70" /> {/* <-- opacity bumped */}
         <div className="relative z-10 p-5 space-y-3">
           {items.length === 0 && <div className="text-center text-slate-500 mt-16">No messages yet.</div>}
           {items.map((m, i) => (
@@ -352,7 +334,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Composer (emoji & attach handled inside) */}
+      {/* Composer */}
       <MessageInput disabled={!peerEmail || !peerPubX} onSend={sendText} />
     </AppShell>
   );
