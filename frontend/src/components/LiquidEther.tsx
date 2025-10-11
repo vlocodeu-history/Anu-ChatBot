@@ -1,42 +1,42 @@
-// frontend/src/components/LiquidEther.tsx
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 
-/**
- * LiquidEther — animated, soft “neon blobs” background
- * - Renders behind your chat messages
- * - Very light opacity for readability
- */
+type Props = {
+  className?: string;
+  opacity?: number;       // 0..1
+  colors?: string[];      // gradient stops
+  blur?: number;          // px
+};
+
 export default function LiquidEther({
-  intensity = 70, // 0..1 opacity strength
-}: { intensity?: number }) {
-  const alpha = Math.max(0, Math.min(1, intensity));
+  className = '',
+  opacity = 0.7,
+  colors = ['#0b0b0f', '#1a0b1f', '#ff2d9a'], // black -> deep purple -> dark pink
+  blur = 60,
+}: Props) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.style.setProperty('--ether-opacity', String(opacity));
+    ref.current.style.setProperty('--ether-blur', `${blur}px`);
+    ref.current.style.setProperty('--ether-c1', colors[0] || '#0b0b0f');
+    ref.current.style.setProperty('--ether-c2', colors[1] || '#1a0b1f');
+    ref.current.style.setProperty('--ether-c3', colors[2] || '#ff2d9a');
+  }, [opacity, colors, blur]);
 
   return (
     <div
-      aria-hidden
-      className="pointer-events-none absolute inset-0 overflow-hidden"
+      ref={ref}
+      className={`pointer-events-none absolute inset-0 ${className}`}
       style={{
-        // subtle base tint (like WhatsApp sand, but cooler)
         background:
-          'radial-gradient(1200px 600px at 10% -10%, rgba(40,30,60,.08), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(30,60,80,.06), transparent 60%)',
+          'radial-gradient(40% 60% at 15% 20%, var(--ether-c3) 0%, transparent 60%),' +
+          'radial-gradient(35% 50% at 85% 30%, var(--ether-c2) 0%, transparent 60%),' +
+          'radial-gradient(60% 80% at 50% 80%, var(--ether-c1) 0%, transparent 70%)',
+        filter: 'saturate(120%)',
+        opacity: 'var(--ether-opacity)',
+        backdropFilter: `blur(var(--ether-blur))`,
       }}
-    >
-      {/* Blobs */}
-      <span
-        className="le-blob le-blob-a"
-        style={{ opacity: alpha, background: 'radial-gradient(circle at 30% 30%, rgba(110,85,255,.9), rgba(110,85,255,0) 60%)' }}
-      />
-      <span
-        className="le-blob le-blob-b"
-        style={{ opacity: alpha, background: 'radial-gradient(circle at 70% 60%, rgba(255,80,180,.85), rgba(255,80,180,0) 60%)' }}
-      />
-      <span
-        className="le-blob le-blob-c"
-        style={{ opacity: alpha * 0.9, background: 'radial-gradient(circle at 50% 50%, rgba(0,200,220,.8), rgba(0,200,220,0) 60%)' }}
-      />
-
-      {/* Soft noise veil for depth (very faint) */}
-      <div className="absolute inset-0 opacity-[0.06] mix-blend-overlay le-noise" />
-    </div>
+    />
   );
 }
