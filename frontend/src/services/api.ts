@@ -1,40 +1,99 @@
 // frontend/src/services/api.ts
-import axios from 'axios';
+import axios from "axios";
 
-const envUrl = import.meta.env.VITE_API_URL?.trim();
-
-// If VITE_API_URL is missing or wrong, fall back to same-origin (for local dev / proxies)
-const fallback = `${window.location.origin}`;
-const baseURL = envUrl || fallback;
-
-// Helpful log once
-if (import.meta.env.DEV) {
-  // eslint-disable-next-line no-console
-  console.log('[api] baseURL =', baseURL);
-}
-
+/**
+ * Axios instance configured for your backend.
+ * VITE_API_URL must be set (e.g. https://anu-chat-bot.onrender.com).
+ */
 const api = axios.create({
-  baseURL,
-  withCredentials: true,
-  timeout: 15000,
+  baseURL: import.meta.env.VITE_API_URL?.replace(/\/+$/, "") || "",
+  withCredentials: false,
+  timeout: 10000,
 });
 
-// ---- Public helper endpoints your app uses ----
-export async function getPublicKey(user: string): Promise<{ public_x: string | null }> {
-  const { data } = await api.get('/api/users/public-key', { params: { user } });
-  return data;
+// Small helper to attach the token if present
+function authHeader() {
+  const token = localStorage.getItem("token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export async function getMessages(me: string, peer: string) {
-  const { data } = await api.get('/api/messages', { params: { me, peer } });
-  return Array.isArray(data) ? data : [];
+/* ------------------------------------------------------------------ */
+/* Auth                                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Login.
+ * - Demo flow: pass only { email } (backend will accept Alice/Bob).
+ * - Real flow: pass { email, password } (when Supabase users exist).
+ */
+export async function login(opts: { email: string; password?: string }) {
+  const { data } = await api.post("/api/auth/login", opts);
+  return data as { token: string; user: { id: string; email: string } };
 }
 
-export async function uploadFile(file: File): Promise<{ url: string; key: string }> {
+/** Register (if backend supports it); otherwise falls back to login for demo. */
+export async function register(opts: { email: string; password?: string }) {
+  try {
+    const { data } = await api.post("/api/auth/register", opts);
+    return data as { token: string; user: { id: string; email: string } };
+  } catch {
+    // In demo setups without /register, just login with email-only
+    const { data } = await api.post("/api/auth/login", { email: opts.email });
+    return data as { token: string; user: { id: string; email: string } };
+  }
+}
+
+/** Validate token and fetch identity (optional helper). */
+export async function me() {
+  const { data } = await api.get("/api/auth/me", { headers: authHeader() });
+  return data as { userId: string; email: string };
+}
+
+/* ------------------------------------------------------------------ */
+/* Keys & Messages                                                     */
+/* ------------------------------------------------------------------ */
+
+/** Get latest public X25519 key for a userId or email (string). */
+export async function getPublicKey(user: string) {
+  const { data } = await api.get("/api/users/public-key", {
+    params: { user },
+    headers: authHeader(),
+  });
+  return data as { public_x?: string | null };
+}
+
+/** Fetch message history between me and peer (ids or emails). */
+export async function getMessages(meIdOrEmail: string, peerIdOrEmail: string) {
+  const { data } = await api.get("/api/messages", {
+    params: { me: meIdOrEmail, peer: peerIdOrEmail },
+    headers: authHeader(),
+  });
+  return data as Array<{
+    id: string;
+    senderId: string;
+    receiverId: string;
+    encryptedContent: string;
+    senderPubX?: string;
+    createdAt?: string;
+  }>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Files (Supabase bucket upload via backend)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Upload a file via backend → Supabase bucket.
+ * Backend route: POST /api/files/upload (multipart/form-data: file)
+ * Returns: { url, key }
+ */
+export async function uploadFile(file: File) {
   const form = new FormData();
-  form.append('file', file);
-  const { data } = await api.post('/api/files/upload', form);
-  return data;
+  form.append("file", file);
+  const { data } = await api.post("/api/files/upload", form, {
+    headers: { ...authHeader(), "Content-Type": "multipart/form-data" },
+  });
+  return data as { url: string; key: string };
 }
 
 export default api;
