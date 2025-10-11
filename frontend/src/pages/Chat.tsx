@@ -405,7 +405,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages with LiquidEther background — opacity ≈ 0.7 */}
+      {/* Messages with LiquidEther background — opacity ≈ 0.7 */} {/* black + dark pink */}
       <div className="relative flex-1 overflow-auto bg-chat-bg dark:bg-slate-950">
         {/* If your LiquidEther supports className, this is enough: */}
         <LiquidEther className="opacity-70 pointer-events-none absolute inset-0" />
