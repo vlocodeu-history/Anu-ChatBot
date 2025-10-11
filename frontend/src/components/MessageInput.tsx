@@ -1,91 +1,82 @@
-// frontend/src/components/MessageInput.tsx
 import { useEffect, useRef, useState } from 'react';
 
 type Props = {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
-  onAttachFiles?: (files: File[]) => void;
+  onAttach?: (file: File) => void;
   disabled?: boolean;
 };
 
 const EMOJIS = [
-  '😀','😁','😂','🤣','😊','😇','🙂','😉','😍','😘','😜','🤪',
-  '👍','👏','🙌','🔥','💯','🎉','🥳','❤️','💙','💚','💛','💜',
+  '😀','😁','😂','🤣','😊','😍','😘','😜','🤗','🤔',
+  '👍','👏','🙏','🔥','💯','✅','❌','🎉','🥳','✨',
+  '😎','😇','😉','😴','🤝','🥰','🙌','🤩','😅','🤤',
 ];
 
 export default function MessageInput({
   value,
   onChange,
   onSend,
-  onAttachFiles,
+  onAttach,
   disabled,
 }: Props) {
   const [showEmoji, setShowEmoji] = useState(false);
-  const emojiBtnRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  // close emoji popover when clicking outside
+  // close emoji panel when clicking outside
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      const t = e.target as Node;
-      if (!popoverRef.current || !showEmoji) return;
-      if (
-        popoverRef.current.contains(t) ||
-        emojiBtnRef.current?.contains(t)
-      ) return;
+      if (!wrapRef.current) return;
+      if (wrapRef.current.contains(e.target as Node)) return;
       setShowEmoji(false);
     }
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
-  }, [showEmoji]);
+  }, []);
 
-  function addEmoji(e: string) {
-    onChange(value + e);
+  function pickEmoji(ch: string) {
+    onChange(value + ch);
   }
 
-  function pickFiles() {
-    fileRef.current?.click();
+  function openFile() {
+    if (fileRef.current) fileRef.current.click();
   }
 
-  function onFilesChosen(ev: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(ev.target.files || []);
-    if (!files.length) return;
-    onAttachFiles?.(files);
-    // reset so choosing same file again still fires change
-    ev.target.value = '';
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f && onAttach) onAttach(f);
+    // reset so picking same file again still triggers change
+    if (fileRef.current) fileRef.current.value = '';
   }
 
   return (
-    <div className="h-[72px] bg-white border-t px-3 flex items-center gap-2 relative">
+    <div ref={wrapRef} className="h-[72px] bg-white border-t px-2 md:px-3 flex items-center gap-1 md:gap-2 relative">
       {/* Attach */}
       <button
-        type="button"
         title="Attach"
+        aria-label="Attach"
         className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600"
-        onClick={pickFiles}
-        aria-label="Attach a file"
+        onClick={openFile}
+        type="button"
       >
         📎
       </button>
       <input
         ref={fileRef}
         type="file"
-        multiple
         className="hidden"
-        onChange={onFilesChosen}
+        onChange={onFileChange}
       />
 
       {/* Emoji */}
       <button
-        ref={emojiBtnRef}
-        type="button"
         title="Emoji"
+        aria-label="Emoji"
         className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600"
-        onClick={() => setShowEmoji(v => !v)}
-        aria-expanded={showEmoji}
-        aria-controls="emoji-popover"
+        onClick={() => setShowEmoji((s) => !s)}
+        type="button"
       >
         😊
       </button>
@@ -96,39 +87,29 @@ export default function MessageInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="Type a message…"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            if (!disabled) onSend();
-          }
-        }}
+        onKeyDown={(e) => { if (e.key === 'Enter') onSend(); }}
         disabled={disabled}
       />
 
       {/* Send */}
       <button
-        type="button"
         className="h-11 px-6 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
         onClick={onSend}
         disabled={disabled}
+        type="button"
       >
         Send
       </button>
 
-      {/* Emoji popover */}
+      {/* Emoji panel */}
       {showEmoji && (
-        <div
-          id="emoji-popover"
-          ref={popoverRef}
-          className="absolute bottom-16 left-16 z-20 w-72 max-w-[80vw] rounded-xl border bg-white shadow-lg p-2 grid grid-cols-8 gap-2"
-        >
-          {EMOJIS.map((e) => (
+        <div className="absolute bottom-[76px] left-0 md:left-20 z-20 w-[280px] rounded-xl border bg-white shadow-lg p-2 grid grid-cols-8 gap-1">
+          {EMOJIS.map((e, i) => (
             <button
-              key={e}
-              className="h-8 w-8 grid place-content-center rounded hover:bg-slate-100"
-              onClick={() => addEmoji(e)}
+              key={i}
+              className="text-xl leading-none p-1 hover:bg-slate-100 rounded"
+              onClick={() => pickEmoji(e)}
               type="button"
-              aria-label={`Insert ${e}`}
             >
               {e}
             </button>
