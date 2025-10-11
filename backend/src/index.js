@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import cookieParser from 'cookie-parser';
 import { createClient as createRedisClient } from 'redis';
 import { createAdapter } from '@socket.io/redis-adapter';
-
+import multer from 'multer';
 import authRoutes from './routes/auth.js';
 
 // Try to load Supabase (optional)
@@ -31,14 +31,15 @@ const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
 const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
 
 const REDIS_URL = process.env.REDIS_URL || '';
+const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'uploads'; // create in Supabase Storage
 
-/* ---- demo users so login & contacts work ---- */
+/* ---- demo users (for auth fallback) ---- */
 const USERS = [
   { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
   { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
 ];
 
-/* ------------------- in-memory helpers/registries ----------------- */
+/* ------------------- in-memory registries (fallback) -------------- */
 const latestPubKeyByUser = new Map(); // userId/email -> public_x
 const contactsByUser = new Map();     // ownerId/email -> [{ email, nickname }]
 const userSocketMap = new Map();      // userId/email -> socketId
@@ -55,28 +56,162 @@ app.use(cors({
   },
   credentials: true,
 }));
-
 app.use(express.json());
 app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);
 
-/* ---- Contacts demo endpoints ---- */
-app.get('/api/users/contacts', (req, res) => {
+/* ---------------- contacts (Supabase if available) ---------------- */
+app.get('/api/users/contacts', async (req, res) => {
   const owner = req.header('x-user') || req.query.owner;
   if (!owner) return res.status(400).json({ error: 'owner missing' });
-  res.json(contactsByUser.get(owner) || []);
+
+  try {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('contact_id, nickname, users(email)')
+        .eq('user_id', await resolveDbUserId(owner));
+      if (error) throw error;
+      // shape to frontend: [{ email, nickname }]
+      const list = (data || []).map(row => ({
+        email: row?.users?.email || row?.contact_id, // fallback
+        nickname: row?.nickname || null,
+      }));
+      return res.json(list);
+    }
+    // in-memory fallback
+    return res.json(contactsByUser.get(owner) || []);
+  } catch (e) {
+    console.error('contacts:list error', e?.message || e);
+    return res.status(500).json({ error: 'contacts list failed' });
+  }
 });
 
-app.post('/api/users/contacts', (req, res) => {
+app.post('/api/users/contacts', async (req, res) => {
   const owner = req.header('x-user') || req.body.owner;
   const { email, nickname } = req.body || {};
   if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
 
-  const list = contactsByUser.get(owner) || [];
-  if (!list.find((c) => c.email === email)) list.push({ email, nickname });
-  contactsByUser.set(owner, list);
-  res.json(list);
+  try {
+    if (supabase) {
+      const ownerId = await resolveDbUserId(owner);
+      const contactId = await resolveDbUserId(email);
+      // allow storing by email if the user doesn’t exist yet
+      const payload = contactId
+        ? { user_id: ownerId, contact_id: contactId, nickname: nickname || null }
+        : { user_id_email: owner, contact_email: email, nickname: nickname || null };
+
+      const { error } = await supabase.from('contacts').insert([payload]);
+      if (error && !String(error.message || '').includes('duplicate')) throw error;
+
+      // respond with fresh list
+      const { data } = await supabase
+        .from('contacts')
+        .select('contact_id, nickname, users(email)')
+        .eq('user_id', ownerId);
+      const list = (data || []).map(row => ({
+        email: row?.users?.email || row?.contact_id,
+        nickname: row?.nickname || null,
+      }));
+      return res.json(list);
+    }
+
+    // in-memory fallback
+    const list = contactsByUser.get(owner) || [];
+    if (!list.find((c) => c.email === email)) list.push({ email, nickname });
+    contactsByUser.set(owner, list);
+    return res.json(list);
+  } catch (e) {
+    console.error('contacts:add error', e?.message || e);
+    return res.status(500).json({ error: 'add contact failed' });
+  }
+});
+
+app.delete('/api/users/contacts', async (req, res) => {
+  const owner = req.header('x-user') || req.query.owner;
+  const email = req.query.email;
+  if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
+
+  try {
+    if (supabase) {
+      const ownerId = await resolveDbUserId(owner);
+      const contactId = await resolveDbUserId(email);
+
+      if (contactId) {
+        await supabase.from('contacts').delete()
+          .eq('user_id', ownerId).eq('contact_id', contactId);
+      }
+      await supabase.from('contacts').delete()
+        .eq('user_id_email', owner).eq('contact_email', email);
+
+      return res.json({ ok: true });
+    }
+
+    // in-memory fallback
+    const list = (contactsByUser.get(owner) || []).filter(c => c.email !== email);
+    contactsByUser.set(owner, list);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('contacts:delete error', e?.message || e);
+    return res.status(500).json({ error: 'delete contact failed' });
+  }
+});
+
+/* ---------------- messages history (Supabase) -------------------- */
+app.get('/api/messages', async (req, res) => {
+  const me = (req.query.me || '').toString();
+  const peer = (req.query.peer || '').toString();
+  if (!me || !peer) return res.status(400).json({ error: 'me & peer required' });
+
+  try {
+    if (!supabase) return res.json([]); // fallback no history
+    const meId = await resolveDbUserId(me);
+    const peerId = await resolveDbUserId(peer);
+    if (!meId || !peerId) return res.json([]);
+
+    const { data, error } = await supabase
+      .from('messages')
+      .select('id, sender_id, receiver_id, encrypted_content, created_at, status')
+      .or(`and(sender_id.eq.${meId},receiver_id.eq.${peerId}),and(sender_id.eq.${peerId},receiver_id.eq.${meId})`)
+      .order('created_at', { ascending: true })
+      .limit(500);
+    if (error) throw error;
+
+    return res.json((data || []).map(r => ({
+      id: r.id,
+      senderId: r.sender_id,
+      receiverId: r.receiver_id,
+      encryptedContent: r.encrypted_content,
+      createdAt: r.created_at,
+      status: r.status || 'delivered',
+    })));
+  } catch (e) {
+    console.error('messages:list error', e?.message || e);
+    return res.status(500).json({ error: 'messages list failed' });
+  }
+});
+
+/* ---------------- simple upload → Supabase Storage --------------- */
+const upload = multer({ storage: multer.memoryStorage() });
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!supabase) return res.status(501).json({ error: 'Supabase not configured' });
+    if (!req.file) return res.status(400).json({ error: 'file missing' });
+
+    const ext = (req.file.originalname || '').split('.').pop() || 'bin';
+    const key = `chat/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+
+    const { error } = await supabase.storage.from(SUPABASE_BUCKET)
+      .upload(key, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+    if (error) throw error;
+
+    const { data: publicUrl } = supabase.storage.from(SUPABASE_BUCKET).getPublicUrl(key);
+    return res.json({ url: publicUrl?.publicUrl || null, key });
+  } catch (e) {
+    console.error('upload error:', e?.message || e);
+    return res.status(500).json({ error: 'upload failed' });
+  }
 });
 
 /* ---- health ---- */
@@ -93,7 +228,7 @@ app.get('/api/users/public-key', (req, res) => {
   res.json({ public_x: pub });
 });
 
-/* ---- demo auth fallbacks (dev only) ---- */
+/* ---- demo auth fallbacks (when not using routes/auth real auth) ---- */
 app.post('/api/auth/login', (req, res) => {
   const { email } = req.body || {};
   const u = USERS.find((x) => x.email === email);
@@ -101,12 +236,10 @@ app.post('/api/auth/login', (req, res) => {
   const token = Buffer.from(`${u.id}.${Date.now()}`).toString('base64');
   res.json({ user: { id: u.id, email: u.email, name: u.name }, token });
 });
-
 app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }));
 
 /* ----------------------- http + socket.io ------------------------- */
 const httpServer = http.createServer(app);
-
 const io = new Server(httpServer, {
   path: '/socket.io',
   cors: { origin: allowedOrigins, credentials: true },
@@ -132,7 +265,6 @@ async function initRedisAndAdapter() {
     console.log('Redis disabled: no REDIS_URL set');
     return;
   }
-
   const needsTLS =
     REDIS_URL.startsWith('redis://') &&
     /upstash\.io$/i.test(new URL(REDIS_URL).hostname);
@@ -149,10 +281,8 @@ async function initRedisAndAdapter() {
     await sub.connect();
 
     io.adapter(createAdapter(pub, sub));
-
     redisClient = pub;
     app.locals.redis = redisClient;
-
     console.log('✅ Redis connected & Socket.IO Redis adapter enabled');
   } catch (err) {
     console.error('Redis init failed; continuing without Redis:', err?.message || err);
@@ -182,9 +312,7 @@ const UUID_RE =
 async function resolveDbUserId(userKey) {
   if (!supabase) return null;
   if (!userKey) return null;
-  if (UUID_RE.test(userKey)) return userKey; // already uuid
-
-  // treat as email
+  if (UUID_RE.test(userKey)) return userKey;
   if (userIdCache.has(userKey)) return userIdCache.get(userKey);
   try {
     const { data, error } = await supabase
@@ -203,26 +331,22 @@ async function resolveDbUserId(userKey) {
   }
 }
 
-async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, senderPubX, createdAt, status }) {
-  if (!supabase) return; // run fine in demo without DB
+async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status }) {
+  if (!supabase) return;
   try {
     const sender_uuid = await resolveDbUserId(senderId);
     const receiver_uuid = await resolveDbUserId(receiverId);
-
     if (!sender_uuid || !receiver_uuid) {
       console.warn('Skipping DB save (missing uuid):', { senderId, receiverId, sender_uuid, receiver_uuid });
       return;
     }
-
     const row = {
       sender_id: sender_uuid,
       receiver_id: receiver_uuid,
       encrypted_content: encryptedContent,
-      sender_pubx: senderPubX || null,           // << store public key for replay decryption
       status: status || 'sent',
       created_at: createdAt || new Date().toISOString(),
     };
-
     const { error } = await supabase.from('messages').insert([row]);
     if (error) throw error;
   } catch (e) {
@@ -254,40 +378,33 @@ io.on('connection', (socket) => {
 
   socket.on('message:send', async ({ senderId, receiverId, encryptedContent, senderPubX }) => {
     try {
-      // Build a complete message envelope (includes senderPubX!)
       const msg = {
         id: crypto.randomUUID(),
         senderId,
         receiverId,
         encryptedContent,
-        senderPubX,                                       // << IMPORTANT
+        senderPubX,
         createdAt: new Date().toISOString(),
       };
 
-      // Ack to sender immediately (lets UI mark pending → delivered)
       socket.emit('message:ack', { messageId: msg.id });
 
-      // Deliver or queue
       let statusForDb = 'delivered';
       const recv = userSocketMap.get(receiverId);
       if (recv) {
-        io.to(recv).emit('message:received', msg);        // << emits senderPubX to receiver
+        io.to(recv).emit('message:received', msg);
       } else if (redisClient) {
         await redisClient.lPush(`offline:${receiverId}`, JSON.stringify(msg));
         socket.emit('message:queued', { receiverId });
         statusForDb = 'queued';
-        console.log('⚠️ Receiver offline; queued (Redis)');
       } else {
         statusForDb = 'sent';
-        console.log('⚠️ Receiver offline; not queued (Redis disabled)');
       }
 
-      // Best-effort persistence (includes sender_pubx)
       persistMessageToSupabase({
         senderId,
         receiverId,
         encryptedContent,
-        senderPubX,
         createdAt: msg.createdAt,
         status: statusForDb,
       }).catch(() => {});
