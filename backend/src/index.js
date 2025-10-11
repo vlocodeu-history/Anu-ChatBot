@@ -11,7 +11,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 
 import authRoutes from './routes/auth.js';
 
-// Try to load Supabase (optional in demo)
+// Try to load Supabase (optional)
 let supabase = null;
 try {
   const mod = await import('./config/supabase.js');
@@ -61,7 +61,7 @@ app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);
 
-/* ---- Contacts demo endpoints (leave as-is) ---- */
+/* ---- Contacts demo endpoints ---- */
 app.get('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.query.owner;
   if (!owner) return res.status(400).json({ error: 'owner missing' });
@@ -93,7 +93,7 @@ app.get('/api/users/public-key', (req, res) => {
   res.json({ public_x: pub });
 });
 
-/* ---- demo auth fallbacks for dev (kept in routes/auth.js for real auth) ---- */
+/* ---- demo auth fallbacks (dev only) ---- */
 app.post('/api/auth/login', (req, res) => {
   const { email } = req.body || {};
   const u = USERS.find((x) => x.email === email);
@@ -175,7 +175,6 @@ async function flushOfflineQueue(userKey, socket) {
 }
 
 /* ---------------- Supabase helpers (optional) --------------------- */
-// cache email -> uuid to avoid frequent lookups
 const userIdCache = new Map();
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -183,7 +182,8 @@ const UUID_RE =
 async function resolveDbUserId(userKey) {
   if (!supabase) return null;
   if (!userKey) return null;
-  if (UUID_RE.test(userKey)) return userKey;
+  if (UUID_RE.test(userKey)) return userKey; // already uuid
+
   // treat as email
   if (userIdCache.has(userKey)) return userIdCache.get(userKey);
   try {
@@ -203,14 +203,13 @@ async function resolveDbUserId(userKey) {
   }
 }
 
-async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status }) {
+async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, senderPubX, createdAt, status }) {
   if (!supabase) return; // run fine in demo without DB
   try {
     const sender_uuid = await resolveDbUserId(senderId);
     const receiver_uuid = await resolveDbUserId(receiverId);
 
     if (!sender_uuid || !receiver_uuid) {
-      // don’t throw; just log so chat still works
       console.warn('Skipping DB save (missing uuid):', { senderId, receiverId, sender_uuid, receiver_uuid });
       return;
     }
@@ -219,6 +218,7 @@ async function persistMessageToSupabase({ senderId, receiverId, encryptedContent
       sender_id: sender_uuid,
       receiver_id: receiver_uuid,
       encrypted_content: encryptedContent,
+      sender_pubx: senderPubX || null,           // << store public key for replay decryption
       status: status || 'sent',
       created_at: createdAt || new Date().toISOString(),
     };
@@ -254,23 +254,24 @@ io.on('connection', (socket) => {
 
   socket.on('message:send', async ({ senderId, receiverId, encryptedContent, senderPubX }) => {
     try {
+      // Build a complete message envelope (includes senderPubX!)
       const msg = {
         id: crypto.randomUUID(),
         senderId,
         receiverId,
         encryptedContent,
-        senderPubX,
+        senderPubX,                                       // << IMPORTANT
         createdAt: new Date().toISOString(),
       };
 
-      // Ack to sender immediately
+      // Ack to sender immediately (lets UI mark pending → delivered)
       socket.emit('message:ack', { messageId: msg.id });
 
-      // Deliver (or queue)
+      // Deliver or queue
       let statusForDb = 'delivered';
       const recv = userSocketMap.get(receiverId);
       if (recv) {
-        io.to(recv).emit('message:received', msg);
+        io.to(recv).emit('message:received', msg);        // << emits senderPubX to receiver
       } else if (redisClient) {
         await redisClient.lPush(`offline:${receiverId}`, JSON.stringify(msg));
         socket.emit('message:queued', { receiverId });
@@ -281,11 +282,12 @@ io.on('connection', (socket) => {
         console.log('⚠️ Receiver offline; not queued (Redis disabled)');
       }
 
-      // Persist to Supabase (best-effort; won’t break chat if it fails)
+      // Best-effort persistence (includes sender_pubx)
       persistMessageToSupabase({
         senderId,
         receiverId,
         encryptedContent,
+        senderPubX,
         createdAt: msg.createdAt,
         status: statusForDb,
       }).catch(() => {});
