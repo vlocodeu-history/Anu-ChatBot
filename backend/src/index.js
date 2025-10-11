@@ -12,14 +12,11 @@ import multer from 'multer';
 
 import authRoutes from './routes/auth.js';
 
-// Try to load Supabase (optional)
 let supabase = null;
 try {
   const mod = await import('./config/supabase.js');
   supabase = mod.supabase || null;
-} catch {
-  supabase = null;
-}
+} catch { supabase = null; }
 
 dotenv.config();
 
@@ -28,25 +25,25 @@ const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
 
 const FRONTEND_URL = process.env.FRONTEND_URL;
+const CLIENT_URL = process.env.CLIENT_URL;             // <- allow this too
 const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
-const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
+
+const allowedOrigins = [FRONTEND_URL, CLIENT_URL, DEV_URL].filter(Boolean);
 
 const REDIS_URL = process.env.REDIS_URL || '';
 
-/* ---- demo users so login & contacts work ---- */
+/* ---- demo users ---- */
 const USERS = [
   { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
   { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
 ];
 
-/* ------------------- in-memory helpers/registries ----------------- */
-const latestPubKeyByUser = new Map(); // userId/email -> public_x
-const contactsByUser = new Map();     // ownerId/email -> [{ email, nickname }]
-const userSocketMap = new Map();      // userId/email -> socketId
-const socketUserMap = new Map();      // socketId -> userId/email
-
-// NEW: in-memory message store for environments without Supabase
-const messagesInMemory = []; // [{id, senderId, receiverId, encryptedContent, senderPubX, createdAt}]
+/* ------------------- registries ----------------- */
+const latestPubKeyByUser = new Map();
+const contactsByUser = new Map();
+const userSocketMap = new Map();
+const socketUserMap = new Map();
+const messagesInMemory = [];
 
 /* ----------------------------- express ---------------------------- */
 const app = express();
@@ -54,8 +51,16 @@ app.set('trust proxy', 1);
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error(`CORS blocked for ${origin}`));
+    if (!origin) return cb(null, true); // same-origin/SSR
+    try {
+      const host = new URL(origin).hostname;
+      const ok =
+        allowedOrigins.includes(origin) ||
+        /\.vercel\.app$/.test(host); // allow Vercel previews
+      return ok ? cb(null, true) : cb(new Error(`CORS blocked for ${origin}`));
+    } catch {
+      return cb(new Error(`CORS parse error for ${origin}`));
+    }
   },
   credentials: true,
 }));
@@ -83,7 +88,6 @@ app.post('/api/users/contacts', (req, res) => {
   res.json(list);
 });
 
-// NEW: delete contact
 app.delete('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.query.owner || req.body.owner;
   const email = req.query.email || req.body.email;
@@ -105,7 +109,6 @@ app.get('/health', (_req, res) =>
 app.get('/api/users/public-key', (req, res) => {
   const user = (req.query.user || '').toString();
   const pub = latestPubKeyByUser.get(user) || null;
-  console.log(`🔑 Public key request for ${user}:`, pub ? 'Found' : 'Not found');
   res.json({ public_x: pub });
 });
 
@@ -114,7 +117,7 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   path: '/socket.io',
-  cors: { origin: allowedOrigins, credentials: true },
+  cors: { origin: (origin, cb) => cb(null, true), credentials: true },
   pingTimeout: 30_000,
   pingInterval: 25_000,
 });
@@ -127,9 +130,7 @@ function redact(url) {
     const u = new URL(url);
     const username = u.username ? `${u.username}@` : '';
     return `${u.protocol}//${username}${u.host}`;
-  } catch {
-    return '(invalid URL)';
-  }
+  } catch { return '(invalid URL)'; }
 }
 
 async function initRedisAndAdapter() {
@@ -137,34 +138,25 @@ async function initRedisAndAdapter() {
     console.log('Redis disabled: no REDIS_URL set');
     return;
   }
-
   const needsTLS =
     REDIS_URL.startsWith('redis://') &&
     /upstash\.io$/i.test(new URL(REDIS_URL).hostname);
 
-  console.log('Connecting Redis & enabling Socket.IO adapter →', redact(REDIS_URL));
+  console.log('Connecting Redis →', redact(REDIS_URL));
   try {
     const pub = createRedisClient({ url: REDIS_URL, socket: needsTLS ? { tls: true } : undefined });
     const sub = pub.duplicate();
-
     pub.on('error', (e) => console.error('❌ Redis pub error:', e));
     sub.on('error', (e) => console.error('❌ Redis sub error:', e));
-
-    await pub.connect();
-    await sub.connect();
-
+    await pub.connect(); await sub.connect();
     io.adapter(createAdapter(pub, sub));
-
-    redisClient = pub;
-    app.locals.redis = redisClient;
-
-    console.log('✅ Redis connected & Socket.IO Redis adapter enabled');
+    redisClient = pub; app.locals.redis = redisClient;
+    console.log('✅ Redis ready');
   } catch (err) {
     console.error('Redis init failed; continuing without Redis:', err?.message || err);
   }
 }
 
-/* ---------------- offline queue helpers (Redis) ------------------- */
 async function flushOfflineQueue(userKey, socket) {
   try {
     if (!redisClient) return;
@@ -174,31 +166,22 @@ async function flushOfflineQueue(userKey, socket) {
       if (!raw) break;
       socket.emit('message:received', JSON.parse(raw));
     }
-  } catch (e) {
-    console.error('offline flush error:', e);
-  }
+  } catch (e) { console.error('offline flush error:', e); }
 }
 
 /* ---------------- Supabase helpers (optional) --------------------- */
-// cache email -> uuid to avoid frequent lookups
 const userIdCache = new Map();
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function resolveDbUserId(userKey) {
   if (!supabase) return null;
   if (!userKey) return null;
-  if (UUID_RE.test(userKey)) return userKey; // already an id
-
-  // treat as email
+  if (UUID_RE.test(userKey)) return userKey;
   if (userIdCache.has(userKey)) return userIdCache.get(userKey);
   try {
     const { data, error } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', String(userKey).toLowerCase())
-      .limit(1)
-      .maybeSingle();
+      .from('users').select('id').eq('email', String(userKey).toLowerCase())
+      .limit(1).maybeSingle();
     if (error) throw error;
     const id = data?.id || null;
     if (id) userIdCache.set(userKey, id);
@@ -210,7 +193,7 @@ async function resolveDbUserId(userKey) {
 }
 
 async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status, senderPubX }) {
-  if (!supabase) return; // run fine in demo without DB
+  if (!supabase) return;
   try {
     const sender_uuid = await resolveDbUserId(senderId);
     const receiver_uuid = await resolveDbUserId(receiverId);
@@ -233,7 +216,8 @@ async function persistMessageToSupabase({ senderId, receiverId, encryptedContent
 
 /* --------------------------- socket.io ---------------------------- */
 io.on('connection', (socket) => {
-  console.log('🔌 client connected:', socket.id);
+  const say = (msg, ...a) => console.log(`[${socket.id}] ${msg}`, ...a);
+  say('connected');
 
   socket.on('user:online', ({ userId, email, pubX } = {}) => {
     const userKey = userId || email;
@@ -243,13 +227,9 @@ io.on('connection', (socket) => {
     if (email)  userSocketMap.set(email,  socket.id);
     socketUserMap.set(socket.id, userKey);
 
-    if (pubX) {
-      if (userId) latestPubKeyByUser.set(userId, pubX);
-      if (email)  latestPubKeyByUser.set(email,  pubX);
-      console.log(`🔐 Stored public key for ${userId || ''} / ${email || ''}`);
-    }
+    if (pubX) { latestPubKeyByUser.set(userKey, pubX); }
 
-    console.log(`✅ online → ${userKey} @ ${socket.id}`);
+    say(`online as ${userKey}`);
     flushOfflineQueue(userKey, socket).catch(console.error);
   });
 
@@ -257,17 +237,12 @@ io.on('connection', (socket) => {
     try {
       const msg = {
         id: crypto.randomUUID(),
-        senderId,
-        receiverId,
-        encryptedContent,
-        senderPubX,
+        senderId, receiverId, encryptedContent, senderPubX,
         createdAt: new Date().toISOString(),
       };
 
-      // Ack to sender immediately
       socket.emit('message:ack', { messageId: msg.id });
 
-      // Deliver (or queue)
       let statusForDb = 'delivered';
       const recv = userSocketMap.get(receiverId);
       if (recv) {
@@ -276,15 +251,12 @@ io.on('connection', (socket) => {
         await redisClient.lPush(`offline:${receiverId}`, JSON.stringify(msg));
         socket.emit('message:queued', { receiverId });
         statusForDb = 'queued';
-        console.log('⚠️ Receiver offline; queued (Redis)');
       } else {
         statusForDb = 'sent';
-        console.log('⚠️ Receiver offline; not queued (Redis disabled)');
       }
 
-      // Persist
       persistMessageToSupabase({ ...msg, status: statusForDb }).catch(() => {});
-      messagesInMemory.push(msg); // always keep a tiny in-memory history too (for demo / no-DB)
+      messagesInMemory.push(msg);
       if (messagesInMemory.length > 5000) messagesInMemory.shift();
     } catch (e) {
       console.error('message:send error:', e);
@@ -300,12 +272,11 @@ io.on('connection', (socket) => {
       }
     }
     socketUserMap.delete(socket.id);
-    console.log('❌ client disconnected:', socket.id, reason);
+    console.log('❌ disconnected:', socket.id, reason);
   });
 });
 
 /* ---------------------- message history API ----------------------- */
-// GET /api/messages?me=<idOrEmail>&peer=<idOrEmail>
 app.get('/api/messages', async (req, res) => {
   const me = String(req.query.me || '');
   const peer = String(req.query.peer || '');
@@ -336,7 +307,6 @@ app.get('/api/messages', async (req, res) => {
       return res.json(out);
     }
 
-    // fallback: in-memory
     const out = messagesInMemory
       .filter(m =>
         (m.senderId === me && m.receiverId === peer) ||
@@ -350,18 +320,16 @@ app.get('/api/messages', async (req, res) => {
 });
 
 /* -------------------- file upload (Supabase) ---------------------- */
-// POST /api/files/upload  (multipart/form-data: file)
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(501).json({ error: 'Supabase not configured' });
-    }
+    if (!supabase) return res.status(501).json({ error: 'Supabase not configured' });
+
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'file missing' });
 
-    const bucket = process.env.SUPABASE_UPLOAD_BUCKET || 'uploads';
+    const bucket = (process.env.SUPABASE_UPLOAD_BUCKET || 'uploads').trim(); // <-- trim
     const ext = (file.originalname.split('.').pop() || 'bin').toLowerCase();
     const key = `chat/${Date.now()}-${crypto.randomUUID()}.${ext}`;
 
@@ -374,7 +342,6 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
 
     if (upErr) throw upErr;
 
-    // Make it public (or use signed URL)
     const { data: pub } = supabase.storage.from(bucket).getPublicUrl(key);
     const url = pub?.publicUrl;
     if (!url) throw new Error('publicUrl missing');
@@ -392,7 +359,6 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     await initRedisAndAdapter();
     httpServer.listen(PORT, HOST, () => {
       console.log(`🚀 Server running on http://${HOST}:${PORT}`);
-      console.log('🔐 E2EE Chat Backend Ready');
       console.log('Allowed origins:', allowedOrigins);
       console.log('Supabase persistence:', !!supabase);
     });
