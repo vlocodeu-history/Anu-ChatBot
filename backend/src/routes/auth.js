@@ -2,6 +2,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 
 // Try to import Supabase client if present
 let supabase = null;
@@ -15,26 +16,44 @@ try {
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
 
-// In-memory demo users (email-only)
+// In-memory demo users (email-only). NOTE: this is ephemeral (resets on deploy).
 const DEMO_USERS = [
   { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
   { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
 ];
 
 const signJwt = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+const normEmail = (e) => String(e || '').trim().toLowerCase();
 
 /* ------------------------------ REGISTER ------------------------------ */
-/** POST /api/auth/register  — requires Supabase (real users) */
+/**
+ * POST /api/auth/register
+ * - If Supabase is configured: real registration (hash + insert) and JWT.
+ * - If Supabase is NOT configured: demo fallback — create or return a demo user
+ *   so the frontend Register flow works during development.
+ */
 router.post('/register', async (req, res) => {
+  let { email, password, name } = req.body || {};
+  email = normEmail(email);
+
+  if (!email) return res.status(400).json({ message: 'Email required' });
+
+  // Demo fallback when Supabase is not configured
   if (!supabase) {
-    return res.status(501).json({ message: 'Register is disabled (no Supabase configured)' });
+    let user = DEMO_USERS.find(u => u.email === email);
+    if (!user) {
+      user = { id: crypto.randomUUID(), email, name: name || email.split('@')[0] };
+      DEMO_USERS.push(user);
+    }
+    const token = Buffer.from(`${user.id}.${Date.now()}`).toString('base64');
+    return res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name } });
   }
 
-  let { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
-  email = String(email).trim().toLowerCase();
+  // Real registration via Supabase
+  if (!password) return res.status(400).json({ message: 'Password required' });
 
   try {
+    // If the email already exists, behave like "login" if the password matches.
     const { data: existing, error: selErr } = await supabase
       .from('users')
       .select('id, email, password_hash')
@@ -78,10 +97,10 @@ router.post('/register', async (req, res) => {
  *  - { email }           → demo login with in-memory users
  */
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  const normEmail = String(email || '').trim().toLowerCase();
+  const { password } = req.body || {};
+  const email = normEmail(req.body?.email);
 
-  if (!normEmail) return res.status(400).json({ message: 'Email required' });
+  if (!email) return res.status(400).json({ message: 'Email required' });
 
   // If a password is provided, attempt real login first
   if (password && supabase) {
@@ -89,7 +108,7 @@ router.post('/login', async (req, res) => {
       const { data: rows, error } = await supabase
         .from('users')
         .select('id, email, password_hash')
-        .eq('email', normEmail)
+        .eq('email', email)
         .limit(1);
 
       if (error) throw error;
@@ -107,7 +126,7 @@ router.post('/login', async (req, res) => {
   }
 
   // Demo fallback (email-only)
-  const demo = DEMO_USERS.find(x => x.email === normEmail);
+  const demo = DEMO_USERS.find(x => x.email === email);
   if (!password && demo) {
     const token = Buffer.from(`${demo.id}.${Date.now()}`).toString('base64');
     return res.json({ token, user: { id: demo.id, email: demo.email, name: demo.name } });
