@@ -7,7 +7,7 @@ import React from 'react';
  * - Very light opacity for readability
  */
 export default function LiquidEther({
-  intensity = 0.9, // 0..1 opacity strength
+  intensity = 70, // 0..1 opacity strength
 }: { intensity?: number }) {
   const alpha = Math.max(0, Math.min(1, intensity));
 
