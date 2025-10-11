@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+// src/pages/Chat.tsx
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getContacts, addContact, type Contact } from '@/services/contacts';
@@ -19,16 +20,47 @@ type WireMsg = {
   id: string;
   senderId: string;
   receiverId: string;
-  encryptedContent: string;
-  senderPubX?: string;
+  encryptedContent: string; // {"nonce":"...","cipher":"..."}
+  senderPubX?: string;       // sender's X25519 public key (base64)
   createdAt?: string;
 };
 type WireCipher = { nonce: string; cipher: string };
 type LocalStatus = 'pending' | 'delivered' | 'failed';
 
-const safeJson = <T,>(s: string | null): T | null => { if (!s) return null; try { return JSON.parse(s) as T; } catch { return null; } };
+const safeJson = <T,>(s: string | null): T | null => {
+  if (!s) return null;
+  try { return JSON.parse(s) as T; } catch { return null; }
+};
+
 const pubXFromContact = (c: Contact): string =>
-  (c as any)?.publicKeys?.public_x || (c as any)?.public_x || (c as any)?.publicKey || '';
+  (c as any)?.publicKeys?.public_x ||
+  (c as any)?.public_x ||
+  (c as any)?.publicKey ||
+  '';
+
+/** Normalize b64 (trim, remove stray quotes/spaces) */
+const norm = (b64?: string | null) => (b64 || '').replace(/\s+/g, '').replace(/^"+|"+$/g, '');
+
+/** Try decrypting with the first good shared key. */
+function tryDecryptWithAny(
+  payload: WireCipher | null,
+  mySecretB64: string,
+  candidatePubKeys: Array<string | undefined | null>
+): string | null {
+  if (!payload || !payload.nonce || !payload.cipher) return null;
+  for (const k of candidatePubKeys) {
+    const pk = norm(k);
+    if (!pk) continue;
+    try {
+      const shared = sharedKeyWith(pk, mySecretB64);
+      const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
+      return text;
+    } catch {
+      // keep trying
+    }
+  }
+  return null;
+}
 
 function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
   const [email, setEmail] = useState('');
@@ -54,7 +86,7 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
     <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2">
       <input className="border px-3 py-2 rounded w-[46%] text-sm" placeholder="email@domain"
              value={email} onChange={(e) => setEmail(e.target.value)} />
-      <input className="border px-3 py-2 rounded w-[38%] text-sm" placeholder="nickname (opt)"
+      <input className="border px-3 py-2 rounded w-[38%] text-sm" placeholder="nickname (op)"
              value={nick} onChange={(e) => setNick(e.target.value)} />
       <button className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
               aria-label="Add contact" title="Add contact" disabled={busy || !email.trim()}>
@@ -82,29 +114,21 @@ export default function ChatPage() {
   const [peerEmail, setPeerEmail] = useState('');
   const [peerPubX, setPeerPubX] = useState('');
 
-  const [input, setInput] = useState('');
-  const [items, setItems] = useState<{ from: string; text: string; at: string; status?: LocalStatus }[]>([]);
+  const [items, setItems] = useState<
+    { from: string; text: string; at: string; status?: LocalStatus }[]
+  >([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-
-  const listRef = useRef<HTMLDivElement | null>(null);
 
   const myKeys = useMemo(() => loadOrCreateKeypair(), []);
   const mySecretB64 = (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
   const myPublicB64 = (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
 
-  // presence + my latest pubkey
+  // Announce presence + latest key
   useEffect(() => {
     if ((me.id || me.email) && myPublicB64) {
       goOnline(me.id || me.email, me.email, myPublicB64);
     }
   }, [myPublicB64, me.id, me.email]);
-
-  // helpers
-  function scrollToBottom() {
-    if (!listRef.current) return;
-    listRef.current.scrollTop = listRef.current.scrollHeight;
-  }
-  useEffect(scrollToBottom, [items.length]);
 
   async function refreshContacts() {
     if (!me.id && !me.email) return;
@@ -118,7 +142,12 @@ export default function ChatPage() {
       setLoadingContacts(false);
     }
   }
-  useEffect(() => { refreshContacts().catch(console.error); }, [me.id, me.email]);
+
+  useEffect(() => {
+    refreshContacts().catch(console.error);
+    const t = setInterval(() => refreshContacts().catch(console.error), 60_000);
+    return () => clearInterval(t);
+  }, [me.id, me.email]);
 
   async function choose(c: Contact) {
     const id = c.id || c.email;
@@ -137,40 +166,52 @@ export default function ChatPage() {
         console.warn('public key lookup failed', e);
       }
     }
+
     setPeerPubX(key);
     setItems([]);
     setSidebarOpen(false);
   }
 
-  // inbound messages
+  // Receive + robust decrypt
   useEffect(() => {
     if (!mySecretB64) return;
 
     const offRecv = onReceiveMessage((m: WireMsg) => {
-      // only render if the message involves me
       const myIds = [me.id, me.email].filter(Boolean);
-      if (!myIds.includes(m.receiverId) && !myIds.includes(m.senderId)) return;
+      const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
+      if (!involvesMe) return;
 
-      // prefer senderPubX from the message for perfect forward secrecy
-      const senderPubX = m.senderPubX || peerPubX;
+      // If it's a message *from me*, we already added a local copy; server relays only to the receiver anyway.
+      const isFromMe = myIds.includes(m.senderId);
 
-      try {
-        const payload = safeJson<WireCipher>(m.encryptedContent);
-        if (!payload?.nonce || !payload?.cipher || !senderPubX) throw new Error('missing crypto data');
-        const shared = sharedKeyWith(senderPubX, mySecretB64);
-        const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
+      const payload = safeJson<WireCipher>(m.encryptedContent);
 
-        const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text, at: m.createdAt || new Date().toISOString(), status: 'delivered' }]);
-      } catch (err) {
-        // fall back gracefully; show encrypted placeholder
-        const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text: '[encrypted]', at: m.createdAt || new Date().toISOString(), status: 'failed' }]);
-        console.warn('Decrypt failed:', err);
+      // Gather every plausible public key for the sender (in order of likelihood)
+      const candidates = [
+        m.senderPubX,                                   // provided by the sender (best)
+        peerPubX,                                       // current chat peer key (works for inbound)
+        localStorage.getItem(`pubkey:${m.senderId}`),   // cached by sender id
+        localStorage.getItem(`pubkey:${m.receiverId}`), // if ids were flipped/cached
+        localStorage.getItem(`pubkey:${peerEmail}`),    // cached by email
+      ];
+
+      let text: string | null = null;
+      if (!isFromMe) {
+        text = tryDecryptWithAny(payload, mySecretB64, candidates);
       }
+
+      const from = isFromMe ? 'Me' : (peerEmail || m.senderId);
+      setItems(prev => [
+        ...prev,
+        {
+          from,
+          text: text ?? '[encrypted]',
+          at: m.createdAt || new Date().toISOString(),
+          status: text ? 'delivered' : 'failed'
+        }
+      ]);
     });
 
-    // ack → flip most-recent pending to delivered
     const offAck = onMessageSent(() => {
       setItems(prev => {
         const copy = [...prev];
@@ -187,21 +228,20 @@ export default function ChatPage() {
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64]);
 
-  // send text
-  const send = () => {
-    const plain = input.trim();
-    if (!plain || !peerEmail || !peerPubX || !mySecretB64) return;
+  const sendText = (plain: string) => {
+    const text = plain.trim();
+    if (!text || !peerEmail || !peerPubX || !mySecretB64) return;
 
     const shared = sharedKeyWith(peerPubX, mySecretB64);
-    const payload = encrypt(plain, shared) as WireCipher;
+    const payload = encrypt(text, shared) as WireCipher;
     const ciphertext = JSON.stringify(payload);
 
     const sender = me.id || me.email;
     const receiver = peerId || peerEmail;
 
-    setItems(prev => [...prev, { from: 'Me', text: plain, at: new Date().toISOString(), status: 'pending' }]);
+    setItems(prev => [...prev, { from: 'Me', text, at: new Date().toISOString(), status: 'pending' }]);
     try {
-      // IMPORTANT: include my public X so the receiver can decrypt immediately
+      // include my latest public key so the receiver can always derive the same shared secret
       sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
     } catch {
       setItems(prev => {
@@ -215,32 +255,7 @@ export default function ChatPage() {
         return copy;
       });
     }
-    setInput('');
   };
-
-  // attach → (demo) just show a system line saying the file name
-  // You can wire this to a real upload later (encrypt file, upload, send URL+key).
-  function onAttach(file: File) {
-    setItems(prev => [...prev, {
-      from: 'Me',
-      text: `📎 ${file.name}`,
-      at: new Date().toISOString(),
-      status: 'pending'
-    }]);
-    // TODO: implement encrypted file upload flow here
-    setTimeout(() => {
-      setItems(prev => {
-        const copy = [...prev];
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].from === 'Me' && copy[i].status === 'pending' && copy[i].text.startsWith('📎 ')) {
-            copy[i] = { ...copy[i], status: 'delivered' };
-            break;
-          }
-        }
-        return copy;
-      });
-    }, 400); // simulate success
-  }
 
   const signOut = () => {
     localStorage.removeItem('token');
@@ -255,10 +270,13 @@ export default function ChatPage() {
         <div className="font-medium">Contacts</div>
         <div className="ml-auto text-xs text-slate-500 truncate">{me.email || '—'}</div>
       </div>
+
       <AddContactForm me={me.id || me.email} onAdded={refreshContacts} />
+
       <div className="px-3 py-2 border-b bg-slate-50">
         <input className="w-full border rounded px-3 py-2 text-sm" placeholder="Search contacts…" onChange={() => {}} />
       </div>
+
       <ul className="overflow-auto flex-1">
         {loadingContacts && <li className="px-3 py-3 text-sm text-slate-500">Loading…</li>}
         {!loadingContacts && !contacts.length && <li className="px-3 py-3 text-sm text-slate-500">No contacts</li>}
@@ -282,7 +300,11 @@ export default function ChatPage() {
   return (
     <AppShell
       title={`My Chat • ${BUILD_TAG}`}
-      right={<button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>Sign out</button>}
+      right={
+        <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20" onClick={signOut}>
+          Sign out
+        </button>
+      }
       sidebar={sidebar}
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
@@ -298,13 +320,11 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages */}
-      <div ref={listRef} className="relative flex-1 overflow-auto bg-[var(--chat-paper,#ece5dd)]">
+      {/* Messages + wallpaper */}
+      <div className="relative flex-1 overflow-auto bg-[var(--chat-paper,#ece5dd)]">
         <ChatWallpaper variant="moroccan" />
         <div className="relative z-10 p-5 space-y-3">
-          {items.length === 0 && (
-            <div className="text-center text-slate-500 mt-16">No messages yet.</div>
-          )}
+          {items.length === 0 && <div className="text-center text-slate-500 mt-16">No messages yet.</div>}
           {items.map((m, i) => (
             <MessageBubble
               key={i}
@@ -317,13 +337,10 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Composer with working emoji + attach */}
+      {/* Composer (emoji & attach handled inside) */}
       <MessageInput
-        value={input}
-        onChange={setInput}
-        onSend={send}
-        onAttach={onAttach}
         disabled={!peerEmail || !peerPubX}
+        onSend={sendText}
       />
     </AppShell>
   );
