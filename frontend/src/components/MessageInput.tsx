@@ -1,100 +1,72 @@
-// src/components/MessageInput.tsx
-import { useEffect, useRef, useState } from 'react';
+// frontend/src/components/MessageInput.tsx
+import { useRef, useState } from 'react';
+import { uploadFile } from '@/services/api';
 
-type Props = {
-  onSend: (text: string) => void;
+export default function MessageInput({
+  disabled,
+  onSend,
+}: {
   disabled?: boolean;
-};
-
-export default function MessageInput({ onSend, disabled }: Props) {
-  const [text, setText] = useState('');
-  const [showEmoji, setShowEmoji] = useState(false);
-  const [showAttach, setShowAttach] = useState(false);
+  onSend: (text: string) => void;
+}) {
+  const [value, setValue] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const emojiRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (emojiRef.current && !emojiRef.current.contains(e.target as Node)) setShowEmoji(false);
-    };
-    document.addEventListener('click', onDocClick);
-    return () => document.removeEventListener('click', onDocClick);
-  }, []);
 
   const send = () => {
-    const v = text.trim();
+    const v = value.trim();
     if (!v) return;
     onSend(v);
-    setText('');
-    setShowEmoji(false);
+    setValue('');
   };
 
-  const addEmoji = (ch: string) => setText((t) => t + ch);
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') send();
+  };
 
-  const onFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const pickFile = () => fileRef.current?.click();
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    // In this minimal build we don’t upload; UX hint only.
-    alert(`Picked file: ${f.name} (${Math.round(f.size / 1024)} KB)\n\nUpload flow is not wired in this build.`);
-    setShowAttach(false);
-    e.target.value = '';
+    try {
+      const { url } = await uploadFile(f);
+      if (url) onSend(url); // send URL as message
+      else alert('Upload flow not available (no Supabase).');
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.message || 'Upload failed');
+    } finally {
+      e.target.value = '';
+    }
   };
 
+  const addEmoji = (emoji: string) => setValue((p) => `${p}${emoji}`);
+
   return (
-    <div className="h-[72px] bg-white border-t px-2 md:px-3 flex items-center gap-2 relative">
-      {/* Attach */}
-      <div className="relative">
-        <button
-          className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600 disabled:opacity-50"
-          title="Attach"
-          onClick={() => setShowAttach((v) => !v)}
-          disabled={disabled}
-        >
-          📎
-        </button>
-        {showAttach && (
-          <div className="absolute bottom-12 left-0 z-20 bg-white shadow-lg border rounded-md p-2 w-48">
-            <button
-              className="w-full text-left px-2 py-1 rounded hover:bg-slate-50"
-              onClick={() => fileRef.current?.click()}
-            >
-              Upload file…
-            </button>
-            <input ref={fileRef} type="file" className="hidden" onChange={onFilePick} />
-          </div>
-        )}
-      </div>
-
-      {/* Emoji */}
-      <div className="relative" ref={emojiRef}>
-        <button
-          className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600 disabled:opacity-50"
-          title="Emoji"
-          onClick={() => setShowEmoji((v) => !v)}
-          disabled={disabled}
-        >
-          😊
-        </button>
-        {showEmoji && (
-          <div className="absolute bottom-12 left-0 z-20 bg-white shadow-lg border rounded-md p-2 grid grid-cols-8 gap-1 w-64">
-            {['😀','😁','😂','🤣','😊','😍','😘','😎','😜','🤗','👍','👏','🙏','💪','✨','🎉','🔥','❤️','💙','💚','💛','💜','🧡','🤍','🤎','🖤','🐞','🦋','🌟','🍀','🍕','☕️','🚀','📎','💬'].map(e => (
-              <button key={e} className="hover:bg-slate-50 rounded" onClick={() => addEmoji(e)}>{e}</button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Text input */}
+    <div className="h-[72px] bg-white dark:bg-slate-900 border-t px-3 flex items-center gap-2">
+      <button
+        className="px-3 py-2 rounded hover:bg-slate-50 dark:hover:bg-slate-800"
+        title="Attach file"
+        onClick={pickFile}
+        disabled={disabled}
+      >
+        📎
+      </button>
+      <button
+        className="px-3 py-2 rounded hover:bg-slate-50 dark:hover:bg-slate-800"
+        title="Emoji"
+        onClick={() => addEmoji('😊')}
+        disabled={disabled}
+      >
+        😊
+      </button>
       <input
-        className="flex-1 h-11 rounded-full px-4 border focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
+        className="flex-1 h-11 rounded-full px-4 border dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
         placeholder="Type a message…"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={onKeyDown}
         disabled={disabled}
       />
-
-      {/* Send */}
       <button
         className="h-11 px-6 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
         onClick={send}
@@ -102,6 +74,7 @@ export default function MessageInput({ onSend, disabled }: Props) {
       >
         Send
       </button>
+      <input ref={fileRef} type="file" className="hidden" onChange={onFile} />
     </div>
   );
 }
