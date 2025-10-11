@@ -336,6 +336,12 @@ export default function ChatPage() {
           ))}
         </div>
       </div>
+      <div className="relative flex-1 overflow-auto bg-chat-bg">
+        <LiquidEther intensity={0.5} />   {/* pretty background */}
+        <div className="relative z-10 p-5 space-y-3">
+        {/* ...your MessageBubble list here... */}
+        </div>
+      </div>
 
       {/* Composer (emoji & attach handled inside) */}
       <MessageInput
