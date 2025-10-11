@@ -10,8 +10,8 @@ import { getPublicKey } from '@/services/api';
 import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
 import MessageBubble from '@/components/MessageBubble';
-import ChatWallpaper from '@/components/ChatWallpaper';
 import MessageInput from '@/components/MessageInput';
+import LiquidEther from '@/components/LiquidEther'; // ← animated background
 
 const BUILD_TAG = 'v4-no-refresh';
 
@@ -84,12 +84,24 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
 
   return (
     <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2">
-      <input className="border px-3 py-2 rounded w-[46%] text-sm" placeholder="email@domain"
-             value={email} onChange={(e) => setEmail(e.target.value)} />
-      <input className="border px-3 py-2 rounded w-[38%] text-sm" placeholder="nickname (op)"
-             value={nick} onChange={(e) => setNick(e.target.value)} />
-      <button className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
-              aria-label="Add contact" title="Add contact" disabled={busy || !email.trim()}>
+      <input
+        className="border px-3 py-2 rounded w-[46%] text-sm"
+        placeholder="email@domain"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <input
+        className="border px-3 py-2 rounded w-[38%] text-sm"
+        placeholder="nickname (op)"
+        value={nick}
+        onChange={(e) => setNick(e.target.value)}
+      />
+      <button
+        className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+        aria-label="Add contact"
+        title="Add contact"
+        disabled={busy || !email.trim()}
+      >
         +
       </button>
       {err && <span className="text-red-600 text-xs ml-2">Failed: {err}</span>}
@@ -181,17 +193,20 @@ export default function ChatPage() {
       const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
       if (!involvesMe) return;
 
-      // If it's a message *from me*, we already added a local copy; server relays only to the receiver anyway.
-      const isFromMe = myIds.includes(m.senderId);
+      // cache the latest public key we see for this sender
+      if (m.senderPubX) {
+        try { localStorage.setItem(`pubkey:${m.senderId}`, m.senderPubX); } catch {}
+      }
 
+      const isFromMe = myIds.includes(m.senderId);
       const payload = safeJson<WireCipher>(m.encryptedContent);
 
-      // Gather every plausible public key for the sender (in order of likelihood)
+      // Try multiple candidate pubkeys
       const candidates = [
-        m.senderPubX,                                   // provided by the sender (best)
-        peerPubX,                                       // current chat peer key (works for inbound)
+        m.senderPubX,                                   // provided by sender
+        peerPubX,                                       // current peer key
         localStorage.getItem(`pubkey:${m.senderId}`),   // cached by sender id
-        localStorage.getItem(`pubkey:${m.receiverId}`), // if ids were flipped/cached
+        localStorage.getItem(`pubkey:${m.receiverId}`), // cached by receiver (sometimes ids swap email/uuid)
         localStorage.getItem(`pubkey:${peerEmail}`),    // cached by email
       ];
 
@@ -207,8 +222,8 @@ export default function ChatPage() {
           from,
           text: text ?? '[encrypted]',
           at: m.createdAt || new Date().toISOString(),
-          status: text ? 'delivered' : 'failed'
-        }
+          status: text ? 'delivered' : 'failed',
+        },
       ]);
     });
 
@@ -320,9 +335,9 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages + wallpaper */}
+      {/* Messages + Liquid Ether background */}
       <div className="relative flex-1 overflow-auto bg-[var(--chat-paper,#ece5dd)]">
-        <ChatWallpaper variant="moroccan" />
+        <LiquidEther intensity={0.7} /> {/* ← increase “blob” opacity here */}
         <div className="relative z-10 p-5 space-y-3">
           {items.length === 0 && <div className="text-center text-slate-500 mt-16">No messages yet.</div>}
           {items.map((m, i) => (
@@ -336,18 +351,9 @@ export default function ChatPage() {
           ))}
         </div>
       </div>
-      <div className="relative flex-1 overflow-auto bg-chat-bg">
-        <LiquidEther intensity={0.5} />   {/* pretty background */}
-        <div className="relative z-10 p-5 space-y-3">
-        {/* ...your MessageBubble list here... */}
-        </div>
-      </div>
 
       {/* Composer (emoji & attach handled inside) */}
-      <MessageInput
-        disabled={!peerEmail || !peerPubX}
-        onSend={sendText}
-      />
+      <MessageInput disabled={!peerEmail || !peerPubX} onSend={sendText} />
     </AppShell>
   );
 }
