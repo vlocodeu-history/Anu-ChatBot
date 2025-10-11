@@ -1,3 +1,4 @@
+// frontend/src/pages/Chat.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -12,7 +13,7 @@ import MessageBubble from '@/components/MessageBubble';
 import ChatWallpaper from '@/components/ChatWallpaper';
 import MessageInput from '@/components/MessageInput';
 
-const BUILD_TAG = 'v5-metronic-emoji'; // shows in header
+const BUILD_TAG = 'v4-no-refresh';
 
 type Me = { id: string; email: string };
 type WireMsg = {
@@ -24,7 +25,12 @@ type WireMsg = {
   createdAt?: string;
 };
 type WireCipher = { nonce: string; cipher: string };
+
 type LocalStatus = 'pending' | 'delivered' | 'failed';
+
+type LocalItem =
+  | { kind: 'text'; from: string; text: string; at: string; status?: LocalStatus }
+  | { kind: 'file'; from: string; filename: string; size: number; mime: string; dataUrl: string; at: string; status?: LocalStatus };
 
 const safeJson = <T,>(s: string | null): T | null => { if (!s) return null; try { return JSON.parse(s) as T; } catch { return null; } };
 const pubXFromContact = (c: Contact): string =>
@@ -52,24 +58,12 @@ function AddContactForm({ me, onAdded }: { me: string; onAdded: () => void }) {
 
   return (
     <form onSubmit={submit} className="sticky top-0 z-10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b px-3 py-3 flex gap-2">
-      <input
-        className="border px-3 py-2 rounded w-[46%] text-sm"
-        placeholder="email@domain"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <input
-        className="border px-3 py-2 rounded w-[38%] text-sm"
-        placeholder="nickname (opt)"
-        value={nick}
-        onChange={(e) => setNick(e.target.value)}
-      />
-      <button
-        className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
-        aria-label="Add contact"
-        title="Add contact"
-        disabled={busy || !email.trim()}
-      >
+      <input className="border px-3 py-2 rounded w-[46%] text-sm" placeholder="email@domain"
+             value={email} onChange={(e) => setEmail(e.target.value)} />
+      <input className="border px-3 py-2 rounded w-[38%] text-sm" placeholder="nickname (opt)"
+             value={nick} onChange={(e) => setNick(e.target.value)} />
+      <button className="px-3 py-2 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+              aria-label="Add contact" title="Add contact" disabled={busy || !email.trim()}>
         +
       </button>
       {err && <span className="text-red-600 text-xs ml-2">Failed: {err}</span>}
@@ -94,7 +88,8 @@ export default function ChatPage() {
   const [peerEmail, setPeerEmail] = useState('');
   const [peerPubX, setPeerPubX] = useState('');
 
-  const [items, setItems] = useState<{ from: string; text: string; at: string; status?: LocalStatus }[]>([]);
+  const [input, setInput] = useState('');
+  const [items, setItems] = useState<LocalItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const myKeys = useMemo(() => loadOrCreateKeypair(), []);
@@ -120,11 +115,7 @@ export default function ChatPage() {
     }
   }
 
-  useEffect(() => {
-    refreshContacts().catch(console.error);
-    const t = setInterval(() => refreshContacts().catch(console.error), 60_000);
-    return () => clearInterval(t);
-  }, [me.id, me.email]);
+  useEffect(() => { refreshContacts().catch(console.error); }, [me.id, me.email]); // removed frequent timer
 
   async function choose(c: Contact) {
     const id = c.id || c.email;
@@ -160,17 +151,27 @@ export default function ChatPage() {
       const senderPubX = m.senderPubX || peerPubX;
 
       try {
-        const payload = safeJson<WireCipher>(m.encryptedContent);
-        if (!payload?.nonce || !payload?.cipher || !senderPubX) throw new Error('missing crypto data');
+        const payload = safeJson<any>(m.encryptedContent);
+        if (!payload || !payload.nonce || !payload.cipher || !senderPubX) throw new Error('missing crypto data');
 
         const shared = sharedKeyWith(senderPubX, mySecretB64);
         const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
 
+        // text might be a plain string OR a JSON string with kind=file
+        let parsed: any;
+        try { parsed = JSON.parse(text); } catch { parsed = null; }
+
         const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text, at: m.createdAt || new Date().toISOString(), status: 'delivered' }]);
+        const at = m.createdAt || new Date().toISOString();
+
+        if (parsed && parsed.kind === 'file') {
+          setItems(prev => [...prev, { kind: 'file', from, filename: parsed.name, size: parsed.size, mime: parsed.mime, dataUrl: parsed.dataUrl, at, status: 'delivered' }]);
+        } else {
+          setItems(prev => [...prev, { kind: 'text', from, text: text, at, status: 'delivered' }]);
+        }
       } catch {
-        const from = myIds.includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
-        setItems(prev => [...prev, { from, text: '[encrypted]', at: m.createdAt || new Date().toISOString(), status: 'failed' }]);
+        const from = [me.id, me.email].includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
+        setItems(prev => [...prev, { kind: 'text', from, text: '[encrypted]', at: m.createdAt || new Date().toISOString(), status: 'failed' }]);
       }
     });
 
@@ -178,8 +179,9 @@ export default function ChatPage() {
       setItems(prev => {
         const copy = [...prev];
         for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].from === 'Me' && (copy[i].status === 'pending' || !copy[i].status)) {
-            copy[i] = { ...copy[i], status: 'delivered' };
+          const it = copy[i];
+          if (it.from === 'Me' && (it.status === 'pending' || !it.status)) {
+            copy[i] = { ...it, status: 'delivered' } as LocalItem;
             break;
           }
         }
@@ -190,10 +192,7 @@ export default function ChatPage() {
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64]);
 
-  /** Send handler used by MessageInput (text + optional file) */
-  const handleSend = (plain: string, _file?: File) => {
-    if (!plain || !peerEmail || !peerPubX || !mySecretB64) return;
-
+  function sendEncryptedPayload(plain: string) {
     const shared = sharedKeyWith(peerPubX, mySecretB64);
     const payload = encrypt(plain, shared) as WireCipher;
     const ciphertext = JSON.stringify(payload);
@@ -201,22 +200,83 @@ export default function ChatPage() {
     const sender = me.id || me.email;
     const receiver = peerId || peerEmail;
 
-    setItems(prev => [...prev, { from: 'Me', text: plain, at: new Date().toISOString(), status: 'pending' }]);
+    sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
+  }
+
+  const sendText = () => {
+    const plain = input.trim();
+    if (!plain || !peerEmail || !peerPubX || !mySecretB64) return;
+    setItems(prev => [...prev, { kind: 'text', from: 'Me', text: plain, at: new Date().toISOString(), status: 'pending' }]);
     try {
-      sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
+      sendEncryptedPayload(plain);
     } catch {
       setItems(prev => {
         const copy = [...prev];
         for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].from === 'Me' && copy[i].status === 'pending') {
-            copy[i] = { ...copy[i], status: 'failed' };
+          const it = copy[i];
+          if (it.kind === 'text' && it.from === 'Me' && it.status === 'pending') {
+            copy[i] = { ...it, status: 'failed' } as LocalItem;
             break;
           }
         }
         return copy;
       });
     }
+    setInput('');
   };
+
+  async function attachFiles(files: File[]) {
+    if (!files.length || !peerEmail || !peerPubX || !mySecretB64) return;
+
+    for (const f of files) {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ''));
+        r.onerror = () => reject(new Error('file read error'));
+        r.readAsDataURL(f);
+      });
+
+      // show locally
+      setItems(prev => [
+        ...prev,
+        {
+          kind: 'file',
+          from: 'Me',
+          filename: f.name,
+          size: f.size,
+          mime: f.type || 'application/octet-stream',
+          dataUrl,
+          at: new Date().toISOString(),
+          status: 'pending',
+        },
+      ]);
+
+      // send as encrypted JSON blob
+      const plain = JSON.stringify({
+        kind: 'file',
+        name: f.name,
+        size: f.size,
+        mime: f.type || 'application/octet-stream',
+        dataUrl,
+      });
+
+      try {
+        sendEncryptedPayload(plain);
+      } catch {
+        setItems(prev => {
+          const copy = [...prev];
+          for (let i = copy.length - 1; i >= 0; i--) {
+            const it = copy[i];
+            if (it.kind === 'file' && it.from === 'Me' && it.status === 'pending') {
+              copy[i] = { ...it, status: 'failed' } as LocalItem;
+              break;
+            }
+          }
+          return copy;
+        });
+      }
+    }
+  }
 
   const signOut = () => {
     localStorage.removeItem('token');
@@ -270,38 +330,66 @@ export default function ChatPage() {
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
     >
-      {/* Chat header (Metronic-style) */}
+      {/* Chat header */}
       <div className="h-14 bg-white border-b px-4 flex items-center gap-3">
-        <img
-          src={`https://ui-avatars.com/api/?name=${encodeURIComponent(peerEmail || 'User')}&background=10b981&color=fff&size=64`}
-          alt="avatar"
-          className="w-9 h-9 rounded-full"
-        />
+        <div className="w-9 h-9 rounded-full bg-emerald-600/90 text-white grid place-content-center text-sm font-semibold">
+          {(peerEmail?.[0] || 'U').toUpperCase()}
+        </div>
         <div className="min-w-0">
           <div className="font-medium truncate">{peerEmail || '—'}</div>
           <div className="text-xs text-slate-500 truncate">Encrypted chat</div>
         </div>
       </div>
 
-      {/* Messages & wallpaper */}
+      {/* Messages + wallpaper */}
       <div className="relative flex-1 overflow-auto bg-[var(--chat-paper,#ece5dd)]">
         <ChatWallpaper variant="moroccan" />
         <div className="relative z-10 p-5 space-y-3">
           {items.length === 0 && <div className="text-center text-slate-500 mt-16">No messages yet.</div>}
-          {items.map((m, i) => (
-            <MessageBubble
-              key={i}
-              side={m.from === 'Me' ? 'right' : 'left'}
-              text={m.text}
-              time={new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              status={m.status} // MessageBubble should show dot color: green=delivered, red=failed, orange=pending
-            />
-          ))}
+          {items.map((m, i) => {
+            const time = new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const side = m.from === 'Me' ? 'right' : 'left';
+
+            if (m.kind === 'file') {
+              return (
+                <MessageBubble
+                  key={i}
+                  side={side}
+                  text={
+                    <span className="inline-flex items-center gap-3">
+                      <a href={m.dataUrl} download={m.filename} className="underline">
+                        {m.filename}
+                      </a>
+                      <span className="text-xs text-slate-500">({Math.round(m.size / 1024)} KB)</span>
+                    </span>
+                  }
+                  time={time}
+                  status={m.status}
+                />
+              );
+            }
+
+            return (
+              <MessageBubble
+                key={i}
+                side={side}
+                text={m.text}
+                time={time}
+                status={m.status}
+              />
+            );
+          })}
         </div>
       </div>
 
-      {/* Composer with emoji + attach */}
-      <MessageInput onSend={handleSend} disabled={!peerEmail || !peerPubX} />
+      {/* Composer with working emoji + attach */}
+      <MessageInput
+        value={input}
+        onChange={setInput}
+        onSend={sendText}
+        onAttachFiles={attachFiles}
+        disabled={!peerEmail || !peerPubX}
+      />
     </AppShell>
   );
 }
