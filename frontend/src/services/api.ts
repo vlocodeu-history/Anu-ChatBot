@@ -1,48 +1,57 @@
+// frontend/src/services/api.ts
 import axios from 'axios';
 
-const API_ORIGIN =
-  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') || '';
+const API =
+  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') ||
+  '';
 
-if (!API_ORIGIN) {
-  console.warn('Tip: set VITE_API_URL to your backend origin, e.g. https://anu-chatbot.onrender.com');
-}
-
-export function requireApiBase(): string {
-  if (!API_ORIGIN) {
-    throw new Error('VITE_API_URL is not set (e.g. https://anu-chatbot.onrender.com)');
-  }
-  return API_ORIGIN;
-}
-
-const api = axios.create({
-  baseURL: API_ORIGIN || '/',
-  timeout: 10000,
-  withCredentials: true,
-});
-
-export default api;
-
-/* -------- Auth -------- */
-export async function login(email: string, password?: string) {
-  requireApiBase();
-  // IMPORTANT: send password so backend tries Supabase
-  const { data } = await api.post('/api/auth/login', { email, password });
-  return data as { token: string; user: { id: string; email: string; name?: string } };
+export async function login(email: string, password: string) {
+  const { data } = await axios.post(`${API}/api/auth/login`, { email, password }, { withCredentials: true });
+  return data as { token: string; user: { id: string; email: string } };
 }
 
 export async function logout() {
-  const { data } = await api.post('/api/auth/logout');
+  await axios.post(`${API}/api/auth/logout`, {}, { withCredentials: true });
+}
+
+export async function getPublicKey(user: string) {
+  const { data } = await axios.get(`${API}/api/users/public-key`, { params: { user } });
+  return data as { public_x?: string | null };
+}
+
+export async function getMessages(me: string, peer: string) {
+  const { data } = await axios.get(`${API}/api/messages`, { params: { me, peer } });
+  return data as Array<{
+    id: string;
+    senderId: string;
+    receiverId: string;
+    encryptedContent: string;
+    createdAt: string;
+    status?: string;
+  }>;
+}
+
+export async function uploadFile(file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  const { data } = await axios.post(`${API}/api/upload`, form, {
+    withCredentials: true,
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data as { url: string | null; key?: string };
+}
+
+export async function del(url: string, params?: Record<string, string>) {
+  const { data } = await axios.delete(`${API}${url}`, { params, withCredentials: true });
   return data;
 }
 
-export async function register(payload: { email: string; password: string }) {
-  const { data } = await api.post('/api/auth/register', payload);
-  return data; // { token, user }
+export async function get(url: string, params?: Record<string, string>) {
+  const { data } = await axios.get(`${API}${url}`, { params, withCredentials: true });
+  return data;
 }
 
-/* -------- Users / Keys -------- */
-export async function getPublicKey(user: string): Promise<{ public_x: string | null } | null> {
-  requireApiBase();
-  const { data } = await api.get('/api/users/public-key', { params: { user } });
-  return data as { public_x: string | null };
+export async function post(url: string, body: any, headers?: Record<string, string>) {
+  const { data } = await axios.post(`${API}${url}`, body, { withCredentials: true, headers });
+  return data;
 }
