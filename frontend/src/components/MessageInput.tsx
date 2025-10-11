@@ -1,112 +1,140 @@
-import { useRef, useState, Suspense, lazy } from 'react';
+// frontend/src/components/MessageInput.tsx
+import { useEffect, useRef, useState } from 'react';
 
-/**
- * Lazy-load Emoji Mart so initial bundle stays small.
- * Install first:
- *   npm i @emoji-mart/react @emoji-mart/data
- */
-const EmojiPicker = lazy(() => import('@emoji-mart/react'));
-import data from '@emoji-mart/data';
-
-export type MessageInputProps = {
-  onSend: (text: string, file?: File) => void;
+type Props = {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  onAttachFiles?: (files: File[]) => void;
   disabled?: boolean;
 };
 
-export default function MessageInput({ onSend, disabled }: MessageInputProps) {
-  const [text, setText] = useState('');
-  const [openEmoji, setOpenEmoji] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+const EMOJIS = [
+  '😀','😁','😂','🤣','😊','😇','🙂','😉','😍','😘','😜','🤪',
+  '👍','👏','🙌','🔥','💯','🎉','🥳','❤️','💙','💚','💛','💜',
+];
 
-  const handleSend = () => {
-    const trimmed = text.trim();
-    if (!trimmed || disabled) return;
-    onSend(trimmed);
-    setText('');
-  };
+export default function MessageInput({
+  value,
+  onChange,
+  onSend,
+  onAttachFiles,
+  disabled,
+}: Props) {
+  const [showEmoji, setShowEmoji] = useState(false);
+  const emojiBtnRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSend();
+  // close emoji popover when clicking outside
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (!popoverRef.current || !showEmoji) return;
+      if (
+        popoverRef.current.contains(t) ||
+        emojiBtnRef.current?.contains(t)
+      ) return;
+      setShowEmoji(false);
     }
-  };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showEmoji]);
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f || disabled) return;
-    // You can encrypt & upload file here later. For now we just pass it up.
-    onSend(`[file] ${f.name}`, f);
-    e.currentTarget.value = '';
-  };
+  function addEmoji(e: string) {
+    onChange(value + e);
+  }
+
+  function pickFiles() {
+    fileRef.current?.click();
+  }
+
+  function onFilesChosen(ev: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(ev.target.files || []);
+    if (!files.length) return;
+    onAttachFiles?.(files);
+    // reset so choosing same file again still fires change
+    ev.target.value = '';
+  }
 
   return (
-    <div className="relative h-[72px] bg-white border-t px-3 flex items-center gap-2">
-      {/* Hidden file input */}
-      <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
-
+    <div className="h-[72px] bg-white border-t px-3 flex items-center gap-2 relative">
       {/* Attach */}
       <button
         type="button"
         title="Attach"
-        onClick={() => fileRef.current?.click()}
-        className="hidden md:inline-flex items-center justify-center w-9 h-9 rounded-full text-slate-600 hover:bg-slate-50"
-        aria-label="Attach"
+        className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600"
+        onClick={pickFiles}
+        aria-label="Attach a file"
       >
         📎
       </button>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={onFilesChosen}
+      />
 
       {/* Emoji */}
-      <div className="relative hidden md:block">
-        <button
-          type="button"
-          title="Emoji"
-          onClick={() => setOpenEmoji(v => !v)}
-          className="inline-flex items-center justify-center w-9 h-9 rounded-full text-slate-600 hover:bg-slate-50"
-          aria-haspopup="dialog"
-          aria-expanded={openEmoji}
-          aria-label="Emoji"
-        >
-          😊
-        </button>
-
-        {openEmoji && (
-          <div className="absolute bottom-12 left-0 z-50">
-            <Suspense fallback={<div className="rounded-md border bg-white p-3 text-sm text-slate-500">Loading…</div>}>
-              {/* @ts-ignore - types from emoji-mart are relaxed */}
-              <EmojiPicker
-                data={data}
-                theme="light"
-                onEmojiSelect={(e: any) => {
-                  const native = e?.native || '';
-                  if (native) setText(t => t + native);
-                  setOpenEmoji(false);
-                }}
-              />
-            </Suspense>
-          </div>
-        )}
-      </div>
+      <button
+        ref={emojiBtnRef}
+        type="button"
+        title="Emoji"
+        className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600"
+        onClick={() => setShowEmoji(v => !v)}
+        aria-expanded={showEmoji}
+        aria-controls="emoji-popover"
+      >
+        😊
+      </button>
 
       {/* Input */}
       <input
         className="flex-1 h-11 rounded-full px-4 border focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
         placeholder="Type a message…"
-        value={text}
-        onChange={e => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (!disabled) onSend();
+          }
+        }}
         disabled={disabled}
       />
 
       {/* Send */}
       <button
         type="button"
-        onClick={handleSend}
-        disabled={disabled}
         className="h-11 px-6 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
+        onClick={onSend}
+        disabled={disabled}
       >
         Send
       </button>
+
+      {/* Emoji popover */}
+      {showEmoji && (
+        <div
+          id="emoji-popover"
+          ref={popoverRef}
+          className="absolute bottom-16 left-16 z-20 w-72 max-w-[80vw] rounded-xl border bg-white shadow-lg p-2 grid grid-cols-8 gap-2"
+        >
+          {EMOJIS.map((e) => (
+            <button
+              key={e}
+              className="h-8 w-8 grid place-content-center rounded hover:bg-slate-100"
+              onClick={() => addEmoji(e)}
+              type="button"
+              aria-label={`Insert ${e}`}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
