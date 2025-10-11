@@ -1,5 +1,5 @@
 // frontend/src/services/contacts.ts
-import api from './api'
+import api from './api';
 
 export type Contact = {
   id?: string;
@@ -8,55 +8,97 @@ export type Contact = {
   publicKey?: string;
 };
 
-const key = (me: string) => `contacts:${me}`;
+const cacheKey = (me: string) => `contacts:${me}`;
 
+function loadLocal(me: string): Contact[] {
+  const raw = localStorage.getItem(cacheKey(me));
+  return raw ? (JSON.parse(raw) as Contact[]) : [];
+}
+
+function saveLocal(me: string, list: Contact[]) {
+  localStorage.setItem(cacheKey(me), JSON.stringify(list));
+}
+
+/**
+ * Get contacts for a user.
+ * Backend accepts either header x-user or query ?owner=<id/email>.
+ */
 export async function getContacts(me: string): Promise<Contact[]> {
-  const token = localStorage.getItem("token") || "";
+  const token = localStorage.getItem('token') || '';
 
   try {
-    const { data } = await api.get("/api/users/contacts", {
-      headers: { 
+    const { data } = await api.get('/api/users/contacts', {
+      headers: {
         Authorization: `Bearer ${token}`,
-        'x-user': me  // ← Added this header
+        'x-user': me,
       },
+      params: { owner: me },
     });
 
-    // normalize ids so UI can safely use c.id ?? c.email
-    return (data ?? []).map((c: any) => ({
+    const list: Contact[] = (data ?? []).map((c: any) => ({
       id: c.id ?? c._id ?? c.email,
       email: c.email,
-      nickname: c.nickname,
-      publicKey: c.publicKey,
+      nickname: c.nickname ?? null,
+      publicKey: c.publicKey ?? undefined,
     }));
+
+    // keep a local cache (handy when backend is unavailable)
+    saveLocal(me, list);
+    return list;
   } catch (err) {
     console.error('getContacts error:', err);
-    // local fallback so UI keeps working if backend route is missing (404)
-    const raw = localStorage.getItem(key(me));
-    return raw ? JSON.parse(raw) : [];
+    // fallback to local cache so UI still works offline or if route is missing
+    return loadLocal(me);
   }
 }
 
+/**
+ * Add a contact.
+ */
 export async function addContact(me: string, email: string, nickname?: string) {
-  const token = localStorage.getItem("token") || "";
+  const token = localStorage.getItem('token') || '';
 
   try {
     await api.post(
-      "/api/users/contacts",
-      { email, nickname, owner: me },  // ← Added owner to body
-      { 
-        headers: { 
+      '/api/users/contacts',
+      { owner: me, email, nickname },
+      {
+        headers: {
           Authorization: `Bearer ${token}`,
-          'x-user': me  // ← Added this header
-        } 
+          'x-user': me,
+        },
       }
     );
   } catch (err) {
     console.error('addContact error:', err);
-    // local fallback if backend route 404s
-    const list = await getContacts(me);
+    // local optimistic fallback
+    const list = loadLocal(me);
     if (!list.find((c) => c.email === email)) {
       list.push({ email, nickname });
-      localStorage.setItem(key(me), JSON.stringify(list));
+      saveLocal(me, list);
     }
+  }
+}
+
+/**
+ * Delete a contact.
+ */
+export async function removeContact(me: string, email: string) {
+  const token = localStorage.getItem('token') || '';
+
+  try {
+    await api.delete('/api/users/contacts', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-user': me,
+      },
+      params: { owner: me, email },
+    });
+  } catch (err) {
+    console.error('removeContact error:', err);
+  } finally {
+    // keep local cache in sync regardless
+    const list = loadLocal(me).filter((c) => c.email !== email);
+    saveLocal(me, list);
   }
 }
