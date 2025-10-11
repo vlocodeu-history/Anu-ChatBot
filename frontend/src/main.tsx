@@ -6,6 +6,10 @@ import "./index.css"; // Tailwind
 const el = document.getElementById("root");
 if (!el) throw new Error("Root element #root not found");
 
+// on App mount (e.g., in main.tsx)
+const saved = localStorage.getItem('theme');
+document.documentElement.classList.toggle('dark', saved === 'dark');
+
 createRoot(el).render(
   <React.StrictMode>
     <App />
