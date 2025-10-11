@@ -24,10 +24,10 @@ dotenv.config();
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
 
+// allow both configured URLs and Vercel previews
 const FRONTEND_URL = process.env.FRONTEND_URL;
-const CLIENT_URL = process.env.CLIENT_URL;             // <- allow this too
+const CLIENT_URL = process.env.CLIENT_URL;
 const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
-
 const allowedOrigins = [FRONTEND_URL, CLIENT_URL, DEV_URL].filter(Boolean);
 
 const REDIS_URL = process.env.REDIS_URL || '';
@@ -40,24 +40,27 @@ const USERS = [
 
 /* ------------------- registries ----------------- */
 const latestPubKeyByUser = new Map();
-const contactsByUser = new Map();
-const userSocketMap = new Map();
-const socketUserMap = new Map();
-const messagesInMemory = [];
+const contactsByUser   = new Map();
+const userSocketMap    = new Map();
+const socketUserMap    = new Map();
+const messagesInMemory = []; // demo/history when Supabase is absent
 
 /* ----------------------------- express ---------------------------- */
 const app = express();
 app.set('trust proxy', 1);
 
+// Robust CORS: allow configured origins + any *.vercel.app preview
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // same-origin/SSR
+    if (!origin) return cb(null, true);
     try {
       const host = new URL(origin).hostname;
-      const ok =
+      const isVercel = host.endsWith('.vercel.app');
+      const allow =
+        isVercel ||
         allowedOrigins.includes(origin) ||
-        /\.vercel\.app$/.test(host); // allow Vercel previews
-      return ok ? cb(null, true) : cb(new Error(`CORS blocked for ${origin}`));
+        host === 'localhost' || host === '127.0.0.1';
+      return allow ? cb(null, true) : cb(new Error(`CORS blocked for ${origin}`));
     } catch {
       return cb(new Error(`CORS parse error for ${origin}`));
     }
@@ -117,7 +120,8 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   path: '/socket.io',
-  cors: { origin: (origin, cb) => cb(null, true), credentials: true },
+  // socket.io has its own CORS; we keep it permissive to match the HTTP CORS above
+  cors: { origin: (_origin, cb) => cb(null, true), credentials: true },
   pingTimeout: 30_000,
   pingInterval: 25_000,
 });
@@ -195,7 +199,7 @@ async function resolveDbUserId(userKey) {
 async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status, senderPubX }) {
   if (!supabase) return;
   try {
-    const sender_uuid = await resolveDbUserId(senderId);
+    const sender_uuid  = await resolveDbUserId(senderId);
     const receiver_uuid = await resolveDbUserId(receiverId);
     if (!sender_uuid || !receiver_uuid) return;
 
@@ -329,7 +333,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'file missing' });
 
-    const bucket = (process.env.SUPABASE_UPLOAD_BUCKET || 'uploads').trim(); // <-- trim
+    const bucket = (process.env.SUPABASE_UPLOAD_BUCKET || 'uploads').trim();
     const ext = (file.originalname.split('.').pop() || 'bin').toLowerCase();
     const key = `chat/${Date.now()}-${crypto.randomUUID()}.${ext}`;
 
