@@ -1,121 +1,107 @@
+// src/components/MessageInput.tsx
 import { useEffect, useRef, useState } from 'react';
 
 type Props = {
-  value: string;
-  onChange: (v: string) => void;
-  onSend: () => void;
-  onAttach?: (file: File) => void;
+  onSend: (text: string) => void;
   disabled?: boolean;
 };
 
-const EMOJIS = [
-  '😀','😁','😂','🤣','😊','😍','😘','😜','🤗','🤔',
-  '👍','👏','🙏','🔥','💯','✅','❌','🎉','🥳','✨',
-  '😎','😇','😉','😴','🤝','🥰','🙌','🤩','😅','🤤',
-];
-
-export default function MessageInput({
-  value,
-  onChange,
-  onSend,
-  onAttach,
-  disabled,
-}: Props) {
+export default function MessageInput({ onSend, disabled }: Props) {
+  const [text, setText] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showAttach, setShowAttach] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const emojiRef = useRef<HTMLDivElement | null>(null);
 
-  // close emoji panel when clicking outside
   useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (!wrapRef.current) return;
-      if (wrapRef.current.contains(e.target as Node)) return;
-      setShowEmoji(false);
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+    const onDocClick = (e: MouseEvent) => {
+      if (emojiRef.current && !emojiRef.current.contains(e.target as Node)) setShowEmoji(false);
+    };
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
   }, []);
 
-  function pickEmoji(ch: string) {
-    onChange(value + ch);
-  }
+  const send = () => {
+    const v = text.trim();
+    if (!v) return;
+    onSend(v);
+    setText('');
+    setShowEmoji(false);
+  };
 
-  function openFile() {
-    if (fileRef.current) fileRef.current.click();
-  }
+  const addEmoji = (ch: string) => setText((t) => t + ch);
 
-  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  const onFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f && onAttach) onAttach(f);
-    // reset so picking same file again still triggers change
-    if (fileRef.current) fileRef.current.value = '';
-  }
+    if (!f) return;
+    // In this minimal build we don’t upload; UX hint only.
+    alert(`Picked file: ${f.name} (${Math.round(f.size / 1024)} KB)\n\nUpload flow is not wired in this build.`);
+    setShowAttach(false);
+    e.target.value = '';
+  };
 
   return (
-    <div ref={wrapRef} className="h-[72px] bg-white border-t px-2 md:px-3 flex items-center gap-1 md:gap-2 relative">
+    <div className="h-[72px] bg-white border-t px-2 md:px-3 flex items-center gap-2 relative">
       {/* Attach */}
-      <button
-        title="Attach"
-        aria-label="Attach"
-        className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600"
-        onClick={openFile}
-        type="button"
-      >
-        📎
-      </button>
-      <input
-        ref={fileRef}
-        type="file"
-        className="hidden"
-        onChange={onFileChange}
-      />
+      <div className="relative">
+        <button
+          className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600 disabled:opacity-50"
+          title="Attach"
+          onClick={() => setShowAttach((v) => !v)}
+          disabled={disabled}
+        >
+          📎
+        </button>
+        {showAttach && (
+          <div className="absolute bottom-12 left-0 z-20 bg-white shadow-lg border rounded-md p-2 w-48">
+            <button
+              className="w-full text-left px-2 py-1 rounded hover:bg-slate-50"
+              onClick={() => fileRef.current?.click()}
+            >
+              Upload file…
+            </button>
+            <input ref={fileRef} type="file" className="hidden" onChange={onFilePick} />
+          </div>
+        )}
+      </div>
 
       {/* Emoji */}
-      <button
-        title="Emoji"
-        aria-label="Emoji"
-        className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600"
-        onClick={() => setShowEmoji((s) => !s)}
-        type="button"
-      >
-        😊
-      </button>
+      <div className="relative" ref={emojiRef}>
+        <button
+          className="px-3 py-2 rounded hover:bg-slate-50 text-slate-600 disabled:opacity-50"
+          title="Emoji"
+          onClick={() => setShowEmoji((v) => !v)}
+          disabled={disabled}
+        >
+          😊
+        </button>
+        {showEmoji && (
+          <div className="absolute bottom-12 left-0 z-20 bg-white shadow-lg border rounded-md p-2 grid grid-cols-8 gap-1 w-64">
+            {['😀','😁','😂','🤣','😊','😍','😘','😎','😜','🤗','👍','👏','🙏','💪','✨','🎉','🔥','❤️','💙','💚','💛','💜','🧡','🤍','🤎','🖤','🐞','🦋','🌟','🍀','🍕','☕️','🚀','📎','💬'].map(e => (
+              <button key={e} className="hover:bg-slate-50 rounded" onClick={() => addEmoji(e)}>{e}</button>
+            ))}
+          </div>
+        )}
+      </div>
 
-      {/* Input */}
+      {/* Text input */}
       <input
-        className="flex-1 h-11 rounded-full px-4 border focus:outline-none focus:ring-2 focus:ring-emerald-500"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 h-11 rounded-full px-4 border focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100"
         placeholder="Type a message…"
-        onKeyDown={(e) => { if (e.key === 'Enter') onSend(); }}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
         disabled={disabled}
       />
 
       {/* Send */}
       <button
         className="h-11 px-6 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-60"
-        onClick={onSend}
+        onClick={send}
         disabled={disabled}
-        type="button"
       >
         Send
       </button>
-
-      {/* Emoji panel */}
-      {showEmoji && (
-        <div className="absolute bottom-[76px] left-0 md:left-20 z-20 w-[280px] rounded-xl border bg-white shadow-lg p-2 grid grid-cols-8 gap-1">
-          {EMOJIS.map((e, i) => (
-            <button
-              key={i}
-              className="text-xl leading-none p-1 hover:bg-slate-100 rounded"
-              onClick={() => pickEmoji(e)}
-              type="button"
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
