@@ -1,3 +1,4 @@
+// frontend/src/services/socket.ts
 import { io, Socket } from "socket.io-client";
 
 const SOCKET_ORIGIN =
@@ -22,9 +23,16 @@ export function getSocket(): Socket {
   return socket;
 }
 
-export function onReceiveMessage(handler: (msg: {
-  id: string; senderId: string; receiverId: string; encryptedContent: string; senderPubX?: string; createdAt?: string;
-}) => void) {
+export type WireMsg = {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  encryptedContent: string;   // stringified {"nonce","cipher"}
+  senderPubX?: string;        // peer's pub key
+  createdAt?: string;
+};
+
+export function onReceiveMessage(handler: (msg: WireMsg) => void) {
   const s = getSocket();
   s.on("message:received", handler);
   return () => s.off("message:received", handler);
@@ -36,11 +44,18 @@ export function onMessageSent(handler: (ack: { messageId: string }) => void) {
   return () => s.off("message:ack", handler);
 }
 
-export function sendEncryptedMessage(senderId: string, receiverId: string, encryptedContent: string, senderPubX?: string) {
+// ✅ includes senderPubX so peers can decrypt on first contact
+export function sendEncryptedMessage(
+  senderId: string,
+  receiverId: string,
+  encryptedContent: string,
+  senderPubX?: string
+) {
   const s = getSocket();
   s.emit("message:send", { senderId, receiverId, encryptedContent, senderPubX });
 }
 
+// Announces presence + publishes my current pubX
 export function goOnline(userId: string, email: string, pubX: string) {
   const s = getSocket();
   s.emit("user:online", { userId, email, pubX });
