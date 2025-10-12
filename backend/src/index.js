@@ -1,4 +1,4 @@
-// backend/src/index.js
+// backend/src/index.js  (ESM)
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -12,44 +12,37 @@ import multer from 'multer';
 
 import authRoutes from './routes/auth.js';
 
+dotenv.config();
+
+/* --------------------------- Optional Supabase --------------------------- */
 let supabase = null;
 try {
-  const mod = await import('./config/supabase.js');
+  const mod = await import('./config/supabase.js'); // must export { supabase }
   supabase = mod.supabase || null;
 } catch { supabase = null; }
 
-dotenv.config();
-
-/* --------------------------- env/config --------------------------- */
+/* ------------------------------- Config --------------------------------- */
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
 
-// allow both configured URLs and Vercel previews
-const FRONTEND_URL = process.env.FRONTEND_URL;
-const CLIENT_URL = process.env.CLIENT_URL;
-const DEV_URL = process.env.DEV_URL || 'http://localhost:5173';
-const allowedOrigins = [FRONTEND_URL, CLIENT_URL, DEV_URL].filter(Boolean);
+const FRONTEND_URL = process.env.FRONTEND_URL;     // e.g. https://anu-chat-bot.vercel.app
+const DEV_URL      = process.env.DEV_URL || 'http://localhost:5173';
+const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
 
 const REDIS_URL = process.env.REDIS_URL || '';
 
-/* ---- demo users ---- */
-const USERS = [
-  { id: '7703ae9b-461a-4b04-a81e-15fef252faae', email: 'alice@test.com', name: 'Alice' },
-  { id: '5f1d7e50-dd82-4b80-a1dd-ebc64f175f63', email: 'bob@test.com',   name: 'Bob'   },
-];
-
-/* ------------------- registries ----------------- */
+/* ------------------- In-memory registries (demo) ------------------------ */
 const latestPubKeyByUser = new Map();
 const contactsByUser   = new Map();
 const userSocketMap    = new Map();
 const socketUserMap    = new Map();
 const messagesInMemory = []; // demo/history when Supabase is absent
 
-/* ----------------------------- express ---------------------------- */
+/* -------------------------------- Express -------------------------------- */
 const app = express();
 app.set('trust proxy', 1);
 
-// Robust CORS: allow configured origins + any *.vercel.app preview
+// CORS – allow configured origins + any *.vercel.app preview
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
@@ -68,74 +61,64 @@ app.use(cors({
   credentials: true,
 }));
 
+// 🔴 Important: parse JSON before routes
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+/* --------------------------------- Routes -------------------------------- */
 app.use('/api/auth', authRoutes);
 
-/* ---- Contacts endpoints ---- */
+/* Contacts (demo) */
 app.get('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.query.owner;
   if (!owner) return res.status(400).json({ error: 'owner missing' });
   res.json(contactsByUser.get(owner) || []);
 });
-
 app.post('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.body.owner;
   const { email, nickname } = req.body || {};
   if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
-
   const list = contactsByUser.get(owner) || [];
-  if (!list.find((c) => c.email === email)) list.push({ email, nickname });
+  if (!list.find(c => c.email === email)) list.push({ email, nickname });
   contactsByUser.set(owner, list);
   res.json(list);
 });
-
 app.delete('/api/users/contacts', (req, res) => {
   const owner = req.header('x-user') || req.query.owner || req.body.owner;
   const email = req.query.email || req.body.email;
   if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
-
   const list = contactsByUser.get(owner) || [];
-  const next = list.filter((c) => c.email !== email);
+  const next = list.filter(c => c.email !== email);
   contactsByUser.set(owner, next);
   res.json({ ok: true });
 });
 
-/* ---- health ---- */
+/* Health */
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/health', (_req, res) =>
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() })
 );
 
-/* ---- public key lookup ---- */
+/* Public key lookup for E2EE */
 app.get('/api/users/public-key', (req, res) => {
   const user = (req.query.user || '').toString();
   const pub = latestPubKeyByUser.get(user) || null;
   res.json({ public_x: pub });
 });
 
-/* ----------------------- http + socket.io ------------------------- */
+/* ----------------------- HTTP + Socket.IO server ------------------------ */
 const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   path: '/socket.io',
-  // socket.io has its own CORS; we keep it permissive to match the HTTP CORS above
-  cors: { origin: (_origin, cb) => cb(null, true), credentials: true },
+  cors: { origin: (_o, cb) => cb(null, true), credentials: true },
   pingTimeout: 30_000,
   pingInterval: 25_000,
 });
 
-/* ----------------------- Redis / adapter -------------------------- */
+/* --------------------------- Optional Redis ----------------------------- */
 let redisClient = null;
-
-function redact(url) {
-  try {
-    const u = new URL(url);
-    const username = u.username ? `${u.username}@` : '';
-    return `${u.protocol}//${username}${u.host}`;
-  } catch { return '(invalid URL)'; }
-}
 
 async function initRedisAndAdapter() {
   if (!REDIS_URL) {
@@ -146,7 +129,6 @@ async function initRedisAndAdapter() {
     REDIS_URL.startsWith('redis://') &&
     /upstash\.io$/i.test(new URL(REDIS_URL).hostname);
 
-  console.log('Connecting Redis →', redact(REDIS_URL));
   try {
     const pub = createRedisClient({ url: REDIS_URL, socket: needsTLS ? { tls: true } : undefined });
     const sub = pub.duplicate();
@@ -173,7 +155,7 @@ async function flushOfflineQueue(userKey, socket) {
   } catch (e) { console.error('offline flush error:', e); }
 }
 
-/* ---------------- Supabase helpers (optional) --------------------- */
+/* -------------------------- Supabase helpers --------------------------- */
 const userIdCache = new Map();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -199,7 +181,7 @@ async function resolveDbUserId(userKey) {
 async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status, senderPubX }) {
   if (!supabase) return;
   try {
-    const sender_uuid  = await resolveDbUserId(senderId);
+    const sender_uuid   = await resolveDbUserId(senderId);
     const receiver_uuid = await resolveDbUserId(receiverId);
     if (!sender_uuid || !receiver_uuid) return;
 
@@ -218,7 +200,7 @@ async function persistMessageToSupabase({ senderId, receiverId, encryptedContent
   }
 }
 
-/* --------------------------- socket.io ---------------------------- */
+/* -------------------------------- Socket.IO ----------------------------- */
 io.on('connection', (socket) => {
   const say = (msg, ...a) => console.log(`[${socket.id}] ${msg}`, ...a);
   say('connected');
@@ -280,7 +262,7 @@ io.on('connection', (socket) => {
   });
 });
 
-/* ---------------------- message history API ----------------------- */
+/* --------------------------- Message history API ------------------------ */
 app.get('/api/messages', async (req, res) => {
   const me = String(req.query.me || '');
   const peer = String(req.query.peer || '');
@@ -323,7 +305,7 @@ app.get('/api/messages', async (req, res) => {
   }
 });
 
-/* -------------------- file upload (Supabase) ---------------------- */
+/* ------------------------------ File upload ----------------------------- */
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
@@ -357,7 +339,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-/* ------------------------------ start ----------------------------- */
+/* --------------------------------- Start -------------------------------- */
 (async function start() {
   try {
     await initRedisAndAdapter();
