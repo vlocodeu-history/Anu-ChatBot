@@ -37,7 +37,7 @@ type WireMsg = {
   senderId: string;
   receiverId: string;
   encryptedContent: string;        // {"nonce":"...","cipher":"..."}
-  senderPubX?: string;              // base64 x25519 pubkey
+  senderPubX?: string;              // base64 x25519 pubkey of SENDER at send-time
   createdAt?: string;
 };
 type WireCipher = { nonce: string; cipher: string };
@@ -71,7 +71,7 @@ function tryDecryptWithAny(
       const text = decrypt({ nonce: payload.nonce, cipher: payload.cipher }, shared);
       return text;
     } catch {
-      // keep trying
+      // try next
     }
   }
   return null;
@@ -194,6 +194,8 @@ export default function ChatPage() {
       const mapped = (history || []).map((m: any) => {
         const payload = safeJson<WireCipher>(m.encryptedContent);
         const candidates = [
+          // ✅ include sender's pub key from the row
+          m.senderPubX,
           peerPubX,
           localStorage.getItem(`pubkey:${m.senderId}`),
           localStorage.getItem(`pubkey:${m.receiverId}`),
@@ -242,18 +244,21 @@ export default function ChatPage() {
       if (!involvesMe) return;
 
       const isFromMe = myIds.includes(m.senderId);
+
+      // 🚫 Do not append a duplicate for my own outbound message
+      if (isFromMe) return;
+
       const payload = safeJson<WireCipher>(m.encryptedContent);
       const candidates = [
-        m.senderPubX,
+        m.senderPubX,               // ✅ sender's pub key attached by peer
         peerPubX,
         localStorage.getItem(`pubkey:${m.senderId}`),
         localStorage.getItem(`pubkey:${m.receiverId}`),
         localStorage.getItem(`pubkey:${peerEmail}`),
       ];
-      let text: string | null = null;
-      if (!isFromMe) text = tryDecryptWithAny(payload, mySecretB64, candidates);
+      const text = tryDecryptWithAny(payload, mySecretB64, candidates);
 
-      const from = isFromMe ? 'Me' : (peerEmail || m.senderId);
+      const from = peerEmail || m.senderId;
       setItems((prev) => [
         ...prev,
         {
@@ -337,9 +342,11 @@ export default function ChatPage() {
     const sender = me.id || me.email;
     const receiver = effectivePeerId;
 
+    // render locally as pending
     setItems((prev) => [...prev, { from: 'Me', text, at: new Date().toISOString(), status: 'pending' }]);
 
     try {
+      // ✅ publish my public key alongside the message (socket.ts already emits senderPubX)
       sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
     } catch {
       setItems((prev) => {
@@ -461,7 +468,7 @@ export default function ChatPage() {
 
       {/* Messages with background */}
       <div className="relative flex-1 overflow-auto bg-chat-bg dark:bg-slate-950">
-        <LiquidEther className="opacity-70" /> {/* ← background; you can tune opacity here */}
+        <LiquidEther className="opacity-70" />
         <div className="relative z-10 p-5 space-y-3">
           {items.length === 0 && (
             <div className="text-center text-slate-500 mt-16">No messages yet.</div>
@@ -478,7 +485,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Composer — now enabled as soon as a peer is selected */}
+      {/* Composer */}
       <MessageInput disabled={!peerEmail} onSend={sendText} />
     </AppShell>
   );
