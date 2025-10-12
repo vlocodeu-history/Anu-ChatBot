@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { login } from "@/services/api";
+import { login as apiLogin } from "@/services/api";
 
 type Props = {
   onSuccess?: (user: { id: string; email: string }, token: string) => void;
@@ -18,7 +18,8 @@ export default function LoginPage({ onSuccess }: Props) {
     setErr(null);
     setLoading(true);
     try {
-      const { token, user } = await login(email, password);
+      // ✅ send JSON object { email, password }
+      const { token, user } = await apiLogin({ email: email.trim(), password });
       localStorage.setItem("token", token);
       localStorage.setItem("me", JSON.stringify({ id: user.id, email: user.email }));
       onSuccess ? onSuccess(user, token) : navigate("/chat", { replace: true });
@@ -41,23 +42,31 @@ export default function LoginPage({ onSuccess }: Props) {
 
         <form onSubmit={submit} className="space-y-3">
           <input
+            id="email"
+            name="email"
+            type="email"
             className="w-full border border-black/10 rounded px-3 py-2 outline-none focus:ring focus:ring-brand-200"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="email"
+            placeholder="alice@test.com"
             autoComplete="username"
+            required
           />
 
           <input
-            className="w-full border border-black/10 rounded px-3 py-2 outline-none focus:ring focus:ring-brand-200"
+            id="password"
+            name="password"
             type="password"
+            className="w-full border border-black/10 rounded px-3 py-2 outline-none focus:ring focus:ring-brand-200"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="password"
             autoComplete="current-password"
+            required
           />
 
           <button
+            type="submit"
             className="w-full bg-brand-500 hover:bg-brand-600 text-white rounded px-3 py-2 transition disabled:opacity-60"
             disabled={loading}
           >
