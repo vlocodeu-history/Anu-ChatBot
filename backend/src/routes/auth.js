@@ -118,7 +118,7 @@ router.post('/login', async (req, res) => {
         const token = signJwt({ userId: user.id, email: user.email });
         return res.json({ token, user: { id: user.id, email: user.email } });
       }
-      // If provided password didn't match a real user, continue to demo fallback below
+      // continue to demo fallback
     } catch (err) {
       console.warn('Supabase login error; falling back to demo:', err?.message || err);
       // continue to demo fallback
