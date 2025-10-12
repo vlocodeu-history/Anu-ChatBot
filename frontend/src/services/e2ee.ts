@@ -1,19 +1,22 @@
+// frontend/src/services/e2ee.ts
 import * as nacl from 'tweetnacl';
 import * as util from 'tweetnacl-util';
 
-const LS_KEY = 'e2ee-keypair'; // private (local only) + public (for convenience)
+const LS_KEY = 'e2ee-keypair-v1';
 
 export type KeyPair = { publicKeyB64: string; secretKeyB64: string };
 
 export function loadOrCreateKeypair(): KeyPair {
   const cached = localStorage.getItem(LS_KEY);
   if (cached) return JSON.parse(cached);
-  const kp = nacl.box.keyPair(); // Curve25519 for ECDH
+  const kp = nacl.box.keyPair(); // Curve25519
   const obj: KeyPair = {
     publicKeyB64: util.encodeBase64(kp.publicKey),
     secretKeyB64: util.encodeBase64(kp.secretKey),
   };
   localStorage.setItem(LS_KEY, JSON.stringify(obj));
+  // also expose pub for other tabs/sockets to read if needed
+  localStorage.setItem('e2ee-public-x', obj.publicKeyB64);
   return obj;
 }
 
