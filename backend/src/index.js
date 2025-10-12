@@ -61,10 +61,9 @@ app.use(cors({
   credentials: true,
 }));
 
-// 🔴 Important: parse JSON before routes
+// 🔴 Parse body BEFORE routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/api/auth', authRoutes);
 app.use(cookieParser());
 
 /* --------------------------------- Routes -------------------------------- */
@@ -309,6 +308,12 @@ app.get('/api/messages', async (req, res) => {
 /* ------------------------------ File upload ----------------------------- */
 const upload = multer({ storage: multer.memoryStorage() });
 
+// sanitize filename (keep readable names, remove unsafe chars)
+function sanitizeFilename(name) {
+  const base = (name || 'file').split(/[\\/]/).pop();
+  return base.replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 120);
+}
+
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
   try {
     if (!supabase) return res.status(501).json({ error: 'Supabase not configured' });
@@ -317,23 +322,25 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     if (!file) return res.status(400).json({ error: 'file missing' });
 
     const bucket = (process.env.SUPABASE_UPLOAD_BUCKET || 'uploads').trim();
-    const ext = (file.originalname.split('.').pop() || 'bin').toLowerCase();
-    const key = `chat/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+
+    // ✅ preserve original filename inside chat/ folder
+    const safeName = sanitizeFilename(file.originalname);
+    const key = `chat/${safeName}`;
 
     const { error: upErr } = await supabase.storage
       .from(bucket)
       .upload(key, file.buffer, {
         contentType: file.mimetype || 'application/octet-stream',
-        upsert: false,
+        upsert: true, // overwrite same name; set false if you want 409 on duplicate
       });
 
-    if (upErr) throw upErr;
+    if (upErr && !/The resource already exists/i.test(upErr.message)) throw upErr;
 
     const { data: pub } = supabase.storage.from(bucket).getPublicUrl(key);
     const url = pub?.publicUrl;
     if (!url) throw new Error('publicUrl missing');
 
-    return res.json({ url, key });
+    return res.json({ url, key, name: safeName, size: file.size, type: file.mimetype });
   } catch (e) {
     console.error('upload failed:', e?.message || e);
     return res.status(500).json({ error: 'upload failed' });
