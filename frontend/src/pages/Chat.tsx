@@ -185,15 +185,21 @@ export default function ChatPage() {
       const history = await getMessages(me.id || me.email, peerEmailOrId);
       const mapped = (history || []).map((m: any) => {
         const payload = safeJson<WireCipher>(m.encryptedContent);
+        const iAmSender = [me.id, me.email].includes(m.senderId);
+
+        // ✅ choose key order per message
+        const first = iAmSender ? peerPubX : m.senderPubX;
         const candidates = [
-          m.senderPubX,                                // ✅ use sender key first
-          peerPubX,
+          first,
+          // fallbacks
+          iAmSender ? m.senderPubX : peerPubX,
           localStorage.getItem(`pubkey:${m.senderId}`),
           localStorage.getItem(`pubkey:${m.receiverId}`),
           localStorage.getItem(`pubkey:${peerEmail}`),
         ];
+
         const text = tryDecryptWithAny(payload, mySecretB64, candidates);
-        const from = [me.id, me.email].includes(m.senderId) ? 'Me' : (peerEmail || m.senderId);
+        const from = iAmSender ? 'Me' : (peerEmail || m.senderId);
         return { from, text: text ?? '[encrypted]', at: m.createdAt, status: text ? 'delivered' : 'failed' };
       });
       setItems(mapped);
@@ -233,17 +239,17 @@ export default function ChatPage() {
       const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
       if (!involvesMe) return;
 
-      // ✅ show only if message belongs to the currently selected peer
+      // ✅ only if belongs to the selected peer
       const otherParty = myIds.includes(m.senderId) ? m.receiverId : m.senderId;
       if (otherParty !== (peerId || peerEmail)) return;
 
-      // ✅ skip echo of my own outbound message (UI already shows my pending→delivered bubble)
+      // ✅ skip echo of my own outbound message
       const isFromMe = myIds.includes(m.senderId);
       if (isFromMe) return;
 
       const payload = safeJson<WireCipher>(m.encryptedContent);
       const candidates = [
-        m.senderPubX,                                // ✅ use sender key first
+        m.senderPubX,               // sender key first: they encrypted to my pub
         peerPubX,
         localStorage.getItem(`pubkey:${m.senderId}`),
         localStorage.getItem(`pubkey:${m.receiverId}`),
@@ -337,7 +343,7 @@ export default function ChatPage() {
     setItems((prev) => [...prev, { from: 'Me', text, at: new Date().toISOString(), status: 'pending' }]);
 
     try {
-      // includes my public key so the peer can decrypt
+      // include my pubX so the peer can decrypt
       sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
     } catch {
       setItems((prev) => {
