@@ -326,6 +326,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     // ✅ preserve original filename inside chat/ folder
     const safeName = sanitizeFilename(file.originalname);
     const key = `chat/${safeName}`;
+    console.log('UPLOAD usingKey=', key, 'original=', file.originalname);
 
     const { error: upErr } = await supabase.storage
       .from(bucket)
