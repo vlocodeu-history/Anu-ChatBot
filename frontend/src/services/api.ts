@@ -93,7 +93,7 @@ export async function uploadFile(file: File) {
   const { data } = await api.post("/api/files/upload", form, {
     headers: { ...authHeader(), "Content-Type": "multipart/form-data" },
   });
-  return data as { url: string; key: string };
+  return data as { url: string; key: string; name: string; size?: number; type?: string };
 }
 
 export default api;
