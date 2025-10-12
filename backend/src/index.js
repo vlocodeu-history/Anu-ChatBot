@@ -64,6 +64,7 @@ app.use(cors({
 // 🔴 Important: parse JSON before routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/api/auth', authRoutes);
 app.use(cookieParser());
 
 /* --------------------------------- Routes -------------------------------- */
