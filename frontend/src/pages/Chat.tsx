@@ -126,26 +126,11 @@ export default function ChatPage() {
   const me = safeJson<Me>(localStorage.getItem('me')) || { id: '', email: '' };
 
   // theme
-  // theme (named themes, still compatible with your dark class)
-  const themeOptions = Object.keys(THEMES) as Array<keyof typeof THEMES>;
-  const [themeName, setThemeName] = useState<keyof typeof THEMES>(() =>
-    (localStorage.getItem('themeName') as keyof typeof THEMES) || 'Classic Light'
-  );
+  const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
   useEffect(() => {
-    applyTheme(themeName);
-    localStorage.setItem('themeName', themeName);
-  }, [themeName]);
-
-  // Keep a simple dark toggle behaving like before:
-  const isDark = !!THEMES[themeName].dark;
-  const toggleDark = () => {
-    // flip between the closest light/dark variants without changing other choices
-    setThemeName((prev) => {
-      const next = THEMES[prev].dark ? 'Classic Light' : 'Slate Dark';
-      return next as keyof typeof THEMES;
-    });
-  };
-
+    document.documentElement.classList.toggle('dark', dark);
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  }, [dark]);
 
   useEffect(() => {
     if (!token || (!me.id && !me.email)) navigate('/login', { replace: true });
@@ -497,24 +482,12 @@ export default function ChatPage() {
       title="My Chat"
       right={
         <div className="flex items-center gap-2">
-          <select
-            className="px-2 py-1 rounded border dark:border-slate-700 bg-white dark:bg-slate-900 text-sm"
-            value={themeName}
-            onChange={(e) => setThemeName(e.target.value as any)}
-            title="Theme"
-          >
-            {themeOptions.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-
           <button
             className="px-2 py-1 rounded border dark:border-slate-700"
-            onClick={toggleDark}
+            onClick={() => setDark((d) => !d)}
           >
-            {isDark ? 'Light' : 'Dark'}
+            {dark ? 'Light' : 'Dark'}
           </button>
-
           <button
             className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
             onClick={signOut}
@@ -523,7 +496,6 @@ export default function ChatPage() {
           </button>
         </div>
       }
-
       sidebar={sidebar}
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
