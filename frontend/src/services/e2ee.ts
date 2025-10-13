@@ -1,4 +1,3 @@
-// frontend/src/services/e2ee.ts
 import * as nacl from 'tweetnacl';
 import * as util from 'tweetnacl-util';
 
@@ -10,12 +9,24 @@ const LEGACY_KEYS = ['e2ee-keypair', 'e2ee-keypair-v0'];
 
 export type KeyPair = { publicKeyB64: string; secretKeyB64: string };
 
+// ---- helpers ----
 function readAny(keys: string[]): string | null {
   for (const k of keys) {
     const v = localStorage.getItem(k);
     if (v) return v;
   }
   return null;
+}
+
+// Accept both standard and URL-safe base64, trim quotes/whitespace, and pad
+function normalizeB64(input: string): string {
+  let s = String(input || '').trim().replace(/^"+|"+$/g, '').replace(/\s+/g, '');
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = s.length % 4;
+  if (pad === 2) s += '==';
+  else if (pad === 3) s += '=';
+  else if (pad !== 0 && s.length > 0) s += '===';
+  return s;
 }
 
 export function loadOrCreateKeypair(): KeyPair {
@@ -29,11 +40,10 @@ export function loadOrCreateKeypair(): KeyPair {
   const legacy = readAny(LEGACY_KEYS);
   if (legacy) {
     try {
-      const kp = JSON.parse(legacy) as KeyPair;
-      // normalize shape if an older structure was used
+      const kp = JSON.parse(legacy) as any;
       const fixed: KeyPair = {
-        publicKeyB64: (kp as any).publicKeyB64 || (kp as any).public_x || (kp as any).publicKey,
-        secretKeyB64: (kp as any).secretKeyB64 || (kp as any).secretKey,
+        publicKeyB64: kp.publicKeyB64 || kp.public_x || kp.publicKey,
+        secretKeyB64: kp.secretKeyB64 || kp.secretKey,
       };
       if (fixed.publicKeyB64 && fixed.secretKeyB64) {
         localStorage.setItem(LS_KEY, JSON.stringify(fixed));
@@ -54,8 +64,8 @@ export function loadOrCreateKeypair(): KeyPair {
 
 // Derive shared secret (ECDH)
 export function sharedKeyWith(peerPublicKeyB64: string, mySecretKeyB64: string): Uint8Array {
-  const peerPub = util.decodeBase64(String(peerPublicKeyB64).trim());
-  const mySec  = util.decodeBase64(String(mySecretKeyB64).trim());
+  const peerPub = util.decodeBase64(normalizeB64(peerPublicKeyB64));
+  const mySec  = util.decodeBase64(normalizeB64(mySecretKeyB64));
   return nacl.box.before(peerPub, mySec);
 }
 
@@ -67,8 +77,8 @@ export function encrypt(plaintext: string, sharedKey: Uint8Array) {
 }
 
 export function decrypt(payload: { nonce: string; cipher: string }, sharedKey: Uint8Array) {
-  const nonce  = util.decodeBase64(payload.nonce);
-  const cipher = util.decodeBase64(payload.cipher);
+  const nonce  = util.decodeBase64(normalizeB64(payload.nonce));
+  const cipher = util.decodeBase64(normalizeB64(payload.cipher));
   const opened = nacl.box.open.after(cipher, nonce, sharedKey);
   if (!opened) throw new Error('Decryption failed');
   return util.encodeUTF8(opened);
