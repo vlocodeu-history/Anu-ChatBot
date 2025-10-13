@@ -1,4 +1,3 @@
-// frontend/src/services/api.ts
 import axios from "axios";
 
 /**
@@ -21,29 +20,21 @@ function authHeader() {
 /* Auth                                                               */
 /* ------------------------------------------------------------------ */
 
-/**
- * Login.
- * - Demo flow: pass only { email } (backend will accept Alice/Bob).
- * - Real flow: pass { email, password } (when Supabase users exist).
- */
 export async function login(opts: { email: string; password?: string }) {
   const { data } = await api.post("/api/auth/login", opts);
   return data as { token: string; user: { id: string; email: string } };
 }
 
-/** Register (if backend supports it); otherwise falls back to login for demo. */
 export async function register(opts: { email: string; password?: string }) {
   try {
     const { data } = await api.post("/api/auth/register", opts);
     return data as { token: string; user: { id: string; email: string } };
   } catch {
-    // In demo setups without /register, just login with email-only
     const { data } = await api.post("/api/auth/login", { email: opts.email });
     return data as { token: string; user: { id: string; email: string } };
   }
 }
 
-/** Validate token and fetch identity (optional helper). */
 export async function me() {
   const { data } = await api.get("/api/auth/me", { headers: authHeader() });
   return data as { userId: string; email: string };
@@ -72,8 +63,9 @@ export async function getMessages(meIdOrEmail: string, peerIdOrEmail: string) {
     id: string;
     senderId: string;
     receiverId: string;
-    encryptedContent: string;
-    senderPubX?: string;
+    encryptedContent: string; // JSON string {nonce,cipher}
+    senderPubX?: string | null;
+    receiverPubX?: string | null;
     createdAt?: string;
   }>;
 }
