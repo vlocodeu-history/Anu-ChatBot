@@ -5,12 +5,12 @@ import axios from "axios";
  * VITE_API_URL must be set (e.g. https://anu-chat-bot.onrender.com).
  */
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL?.replace(/\/+$/, "") || "",
-  withCredentials: false,
-  timeout: 10000,
+  baseURL: (import.meta.env.VITE_API_URL?.replace(/\/+$/, "") || "") as string,
+  withCredentials: false, // JWT goes in Authorization header
+  timeout: 15000,
 });
 
-// Small helper to attach the token if present
+// Attach Authorization header if the token is present
 function authHeader() {
   const token = localStorage.getItem("token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -30,6 +30,7 @@ export async function register(opts: { email: string; password?: string }) {
     const { data } = await api.post("/api/auth/register", opts);
     return data as { token: string; user: { id: string; email: string } };
   } catch {
+    // fallback to passwordless login if register is disabled
     const { data } = await api.post("/api/auth/login", { email: opts.email });
     return data as { token: string; user: { id: string; email: string } };
   }
@@ -41,7 +42,7 @@ export async function me() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Keys & Messages                                                     */
+/* Public keys & Messages                                             */
 /* ------------------------------------------------------------------ */
 
 /** Get latest public X25519 key for a userId or email (string). */
@@ -63,11 +64,50 @@ export async function getMessages(meIdOrEmail: string, peerIdOrEmail: string) {
     id: string;
     senderId: string;
     receiverId: string;
-    encryptedContent: string; // JSON string {nonce,cipher}
-   sender_pub_x?: string | null;
-   receiver_pub_x?: string | null;
+    encryptedContent: string; // JSON string {"nonce","cipher"}
+    sender_pub_x?: string | null;
+    receiver_pub_x?: string | null;
     createdAt?: string;
   }>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Contacts (persisted when Supabase is configured)                    */
+/* ------------------------------------------------------------------ */
+
+export type Contact = {
+  id?: string;          // we use peer_email as id on read
+  email: string;        // peer_email
+  nickname?: string | null;
+  created_at?: string;
+};
+
+/** List contacts for an owner (owner can be UUID or email). */
+export async function getContacts(owner: string) {
+  const { data } = await api.get("/api/users/contacts", {
+    params: { owner },
+    headers: { ...authHeader(), "x-user": owner }, // backend accepts either
+  });
+  return data as Contact[];
+}
+
+/** Add (or upsert) a contact for an owner. */
+export async function addContact(owner: string, email: string, nickname?: string) {
+  const { data } = await api.post(
+    "/api/users/contacts",
+    { owner, email, nickname },
+    { headers: { ...authHeader(), "x-user": owner } }
+  );
+  return data as Contact[];
+}
+
+/** Remove a contact for an owner. */
+export async function removeContact(owner: string, email: string) {
+  const { data } = await api.delete("/api/users/contacts", {
+    params: { owner, email },
+    headers: { ...authHeader(), "x-user": owner },
+  });
+  return data as { ok: boolean };
 }
 
 /* ------------------------------------------------------------------ */
@@ -77,7 +117,7 @@ export async function getMessages(meIdOrEmail: string, peerIdOrEmail: string) {
 /**
  * Upload a file via backend → Supabase bucket.
  * Backend route: POST /api/files/upload (multipart/form-data: file)
- * Returns: { url, key }
+ * Returns: { url, key, name, size?, type? }
  */
 export async function uploadFile(file: File) {
   const form = new FormData();
@@ -89,3 +129,4 @@ export async function uploadFile(file: File) {
 }
 
 export default api;
+
