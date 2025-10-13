@@ -180,7 +180,7 @@ async function resolveDbUserId(userKey) {
 
 async function persistMessageToSupabase({
   senderId, receiverId, encryptedContent, createdAt, status,
-  senderPubX, receiverPubX
+  sender_pub_x, receiver_pub_x
 }) {
   if (!supabase) return;
   try {
@@ -193,8 +193,8 @@ async function persistMessageToSupabase({
       receiver_id: receiver_uuid,
       encrypted_content: encryptedContent,
       status: status || 'sent',
-      sender_pub_x: senderPubX ?? null,
-      receiver_pub_x: receiverPubX ?? null,
+      sender_pub_x: sender_pub_x ?? null,
+      receiver_pub_x: receiver_pub_x ?? null,
       created_at: createdAt || new Date().toISOString(),
     };
 
@@ -228,29 +228,29 @@ io.on('connection', (socket) => {
     flushOfflineQueue(userKey, socket).catch(console.error);
   });
 
-  // 🔑 accept & pass-through receiverPubX (fill it if missing)
+  // 🔑 accept & pass-through receiver_pub_x (fill it if missing)
   socket.on('message:send', async ({
-    senderId, receiverId, encryptedContent, senderPubX, receiverPubX
+    senderId, receiverId, encryptedContent, sender_pub_x, receiver_pub_x
   } = {}) => {
     try {
       if (!senderId || !receiverId || !encryptedContent) return;
 
-      // try to fill missing receiverPubX
-      let finalReceiverPubX = receiverPubX ?? null;
-      if (!finalReceiverPubX) {
-        finalReceiverPubX =
+      // try to fill missing receiver_pub_x
+      let finalreceiver_pub_x = receiver_pub_x ?? null;
+      if (!finalreceiver_pub_x) {
+        finalreceiver_pub_x =
           latestPubKeyByUser.get(String(receiverId)) ??
           latestPubKeyByUser.get(String(receiverId).toLowerCase()) ??
           null;
 
         // optional DB lookup if users table stores public_x
-        if (!finalReceiverPubX && supabase) {
+        if (!finalreceiver_pub_x && supabase) {
           const { data: u } = await supabase
             .from('users')
             .select('public_x,id,email')
             .or(`id.eq.${receiverId},email.eq.${receiverId}`)
             .maybeSingle();
-          finalReceiverPubX = u?.public_x ?? null;
+          finalreceiver_pub_x = u?.public_x ?? null;
         }
       }
 
@@ -259,8 +259,8 @@ io.on('connection', (socket) => {
         senderId,
         receiverId,
         encryptedContent,
-        senderPubX: senderPubX ?? null,
-        receiverPubX: finalReceiverPubX, // ✅ include on the wire
+        sender_pub_x: sender_pub_x ?? null,
+        receiver_pub_x: finalreceiver_pub_x, // ✅ include on the wire
         createdAt: new Date().toISOString(),
       };
 
@@ -335,8 +335,8 @@ app.get('/api/messages', async (req, res) => {
         senderId: m.sender_id,
         receiverId: m.receiver_id,
         encryptedContent: m.encrypted_content,
-        senderPubX: m.sender_pub_x ?? null,
-        receiverPubX: m.receiver_pub_x ?? null,
+        sender_pub_x: m.sender_pub_x ?? null,
+        receiver_pub_x: m.receiver_pub_x ?? null,
         createdAt: m.created_at || undefined,
       }));
       return res.json(out);
