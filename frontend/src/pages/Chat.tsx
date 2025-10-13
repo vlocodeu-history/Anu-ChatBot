@@ -11,7 +11,7 @@ import {
 import {
   onReceiveMessage,
   onMessageSent,
-  sendEncryptedMessage,      // now includes receiverPubX param
+  sendEncryptedMessage,      // now includes receiver_pub_x param
   goOnline,
   type WireMsg as SocketWireMsg,
 } from '@/services/socket';
@@ -191,11 +191,11 @@ export default function ChatPage() {
         const iAmSender = [me.id, me.email].includes(m.senderId);
 
         // Prefer keys saved with the message itself
-        const first = iAmSender ? (m.receiverPubX || peerPubX) : (m.senderPubX || peerPubX);
+        const first = iAmSender ? (m.receiver_pub_x || peerPubX) : (m.sender_pub_x || peerPubX);
         const candidates = [
           first,
           // fallbacks
-          iAmSender ? m.senderPubX : m.receiverPubX,
+          iAmSender ? m.sender_pub_x : m.receiver_pub_x,
           localStorage.getItem(`pubkey:${m.senderId}`),
           localStorage.getItem(`pubkey:${m.receiverId}`),
           localStorage.getItem(`pubkey:${peerEmail}`),
@@ -257,8 +257,8 @@ export default function ChatPage() {
           : (m.encryptedContent as any) || null;
 
       const candidates = [
-        (m as any).senderPubX,
-        (m as any).receiverPubX,
+        (m as any).sender_pub_x,
+        (m as any).receiver_pub_x,
         peerPubX,
         localStorage.getItem(`pubkey:${m.senderId}`),
         localStorage.getItem(`pubkey:${m.receiverId}`),
