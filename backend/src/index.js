@@ -32,10 +32,10 @@ const allowedOrigins = [FRONTEND_URL, DEV_URL].filter(Boolean);
 const REDIS_URL = process.env.REDIS_URL || '';
 
 /* ------------------- In-memory registries (demo) ------------------------ */
-const latestPubKeyByUser = new Map();
+const latestPubKeyByUser = new Map(); // userId|email -> pubX
 const contactsByUser   = new Map();
-const userSocketMap    = new Map();
-const socketUserMap    = new Map();
+const userSocketMap    = new Map();   // userId|email -> socketId
+const socketUserMap    = new Map();   // socketId -> userId|email
 const messagesInMemory = []; // demo/history when Supabase is absent
 
 /* -------------------------------- Express -------------------------------- */
@@ -178,7 +178,10 @@ async function resolveDbUserId(userKey) {
   }
 }
 
-async function persistMessageToSupabase({ senderId, receiverId, encryptedContent, createdAt, status, senderPubX }) {
+async function persistMessageToSupabase({
+  senderId, receiverId, encryptedContent, createdAt, status,
+  senderPubX, receiverPubX
+}) {
   if (!supabase) return;
   try {
     const sender_uuid   = await resolveDbUserId(senderId);
@@ -190,9 +193,11 @@ async function persistMessageToSupabase({ senderId, receiverId, encryptedContent
       receiver_id: receiver_uuid,
       encrypted_content: encryptedContent,
       status: status || 'sent',
-      sender_pubx: senderPubX || null,
+      sender_pub_x: senderPubX ?? null,
+      receiver_pub_x: receiverPubX ?? null,
       created_at: createdAt || new Date().toISOString(),
     };
+
     const { error } = await supabase.from('messages').insert([row]);
     if (error) throw error;
   } catch (e) {
@@ -213,22 +218,35 @@ io.on('connection', (socket) => {
     if (email)  userSocketMap.set(email,  socket.id);
     socketUserMap.set(socket.id, userKey);
 
-    if (pubX) { latestPubKeyByUser.set(userKey, pubX); }
+    if (pubX) {
+      latestPubKeyByUser.set(userKey, pubX);
+    }
 
     say(`online as ${userKey}`);
     flushOfflineQueue(userKey, socket).catch(console.error);
   });
 
-  socket.on('message:send', async ({ senderId, receiverId, encryptedContent, senderPubX }) => {
+  // 🔑 FIX: accept & pass-through receiverPubX
+  socket.on('message:send', async ({
+    senderId, receiverId, encryptedContent, senderPubX, receiverPubX
+  } = {}) => {
     try {
+      if (!senderId || !receiverId || !encryptedContent) return;
+
       const msg = {
         id: crypto.randomUUID(),
-        senderId, receiverId, encryptedContent, senderPubX,
+        senderId,
+        receiverId,
+        encryptedContent,
+        senderPubX: senderPubX ?? null,
+        receiverPubX: receiverPubX ?? null,
         createdAt: new Date().toISOString(),
       };
 
+      // ack to sender
       socket.emit('message:ack', { messageId: msg.id });
 
+      // deliver / queue
       let statusForDb = 'delivered';
       const recv = userSocketMap.get(receiverId);
       if (recv) {
@@ -241,6 +259,7 @@ io.on('connection', (socket) => {
         statusForDb = 'sent';
       }
 
+      // persist
       persistMessageToSupabase({ ...msg, status: statusForDb }).catch(() => {});
       messagesInMemory.push(msg);
       if (messagesInMemory.length > 5000) messagesInMemory.shift();
@@ -276,7 +295,15 @@ app.get('/api/messages', async (req, res) => {
 
       const { data, error } = await supabase
         .from('messages')
-        .select('id, sender_id, receiver_id, encrypted_content, sender_pubx, created_at')
+        .select(`
+          id,
+          sender_id,
+          receiver_id,
+          encrypted_content,
+          sender_pub_x,
+          receiver_pub_x,
+          created_at
+        `)
         .or(`and(sender_id.eq.${meId},receiver_id.eq.${peerId}),and(sender_id.eq.${peerId},receiver_id.eq.${meId})`)
         .order('created_at', { ascending: true });
 
@@ -287,12 +314,14 @@ app.get('/api/messages', async (req, res) => {
         senderId: m.sender_id,
         receiverId: m.receiver_id,
         encryptedContent: m.encrypted_content,
-        senderPubX: m.sender_pubx || undefined,
+        senderPubX: m.sender_pub_x ?? null,
+        receiverPubX: m.receiver_pub_x ?? null,
         createdAt: m.created_at || undefined,
       }));
       return res.json(out);
     }
 
+    // in-memory fallback
     const out = messagesInMemory
       .filter(m =>
         (m.senderId === me && m.receiverId === peer) ||
