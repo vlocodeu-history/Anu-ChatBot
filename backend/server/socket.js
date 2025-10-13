@@ -5,7 +5,7 @@ import { supabase } from './config/supabase.js';
  * Attach Socket.IO handlers.
  * Expects the client to emit:
  *  - "user:online"  { userId, email, pubX }
- *  - "message:send" { senderId, receiverId, encryptedContent, senderPubX, receiverPubX }
+ *  - "message:send" { senderId, receiverId, encryptedContent, sender_pub_x, receiver_pub_x }
  */
 export function attachSocket(io) {
   io.on('connection', (socket) => {
@@ -34,23 +34,23 @@ export function attachSocket(io) {
           senderId,
           receiverId,
           encryptedContent, // stringified {nonce,cipher}
-          senderPubX,
-          receiverPubX,     // may be undefined from old clients
+          sender_pub_x,
+          receiver_pub_x,     // may be undefined from old clients
         } = msg || {};
 
         if (!senderId || !receiverId || !encryptedContent) {
           return cb?.({ error: 'missing required fields' });
         }
 
-        // If receiverPubX not provided, try to look it up once (best effort)
-        let finalReceiverPubX = receiverPubX || null;
-        if (!finalReceiverPubX) {
+        // If receiver_pub_x not provided, try to look it up once (best effort)
+        let finalreceiver_pub_x = receiver_pub_x || null;
+        if (!finalreceiver_pub_x) {
           const { data: u } = await supabase
             .from('users')
             .select('public_x,id,email')
             .or(`id.eq.${receiverId},email.eq.${receiverId}`)
             .maybeSingle();
-          finalReceiverPubX = u?.public_x || null;
+          finalreceiver_pub_x = u?.public_x || null;
         }
 
         // Save to Supabase
@@ -60,8 +60,8 @@ export function attachSocket(io) {
             sender_id: senderId,
             receiver_id: receiverId,
             encrypted_content: encryptedContent,
-            sender_pub_x: senderPubX ?? null,
-            receiver_pub_x: finalReceiverPubX, // <- persist it
+            sender_pub_x: sender_pub_x ?? null,
+            receiver_pub_x: finalreceiver_pub_x, // <- persist it
           }])
           .select('id, sender_id, receiver_id, encrypted_content, sender_pub_x, receiver_pub_x, created_at')
           .single();
@@ -74,8 +74,8 @@ export function attachSocket(io) {
           senderId: data.sender_id,
           receiverId: data.receiver_id,
           encryptedContent: data.encrypted_content,
-          senderPubX: data.sender_pub_x ?? null,
-          receiverPubX: data.receiver_pub_x ?? null,
+          sender_pub_x: data.sender_pub_x ?? null,
+          receiver_pub_x: data.receiver_pub_x ?? null,
           createdAt: data.created_at,
         };
 
