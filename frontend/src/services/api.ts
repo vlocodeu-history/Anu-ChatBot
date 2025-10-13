@@ -64,8 +64,8 @@ export async function getMessages(meIdOrEmail: string, peerIdOrEmail: string) {
     senderId: string;
     receiverId: string;
     encryptedContent: string; // JSON string {nonce,cipher}
-    senderPubX?: string | null;
-    receiverPubX?: string | null;
+   sender_pub_x?: string | null;
+   receiver_pub_x?: string | null;
     createdAt?: string;
   }>;
 }
