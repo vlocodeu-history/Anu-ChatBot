@@ -27,8 +27,8 @@ export type WireMsg = {
   senderId: string;
   receiverId: string;
   encryptedContent: string;   // stringified {"nonce","cipher"}
-  senderPubX?: string | null; // sender's pubkey at time of send
-  receiverPubX?: string | null; // receiver's pubkey at time of send
+  sender_pub_x?: string | null; // sender's pubkey at time of send
+  receiver_pub_x?: string | null; // receiver's pubkey at time of send
   createdAt?: string;
 };
 
@@ -49,16 +49,16 @@ export function sendEncryptedMessage(
   senderId: string,
   receiverId: string,
   encryptedContent: string,
-  senderPubX?: string,
-  receiverPubX?: string
+  sender_pub_x?: string,
+  receiver_pub_x?: string
 ) {
   const s = getSocket();
   s.emit("message:send", {
     senderId,
     receiverId,
     encryptedContent,
-    senderPubX: senderPubX || null,
-    receiverPubX: receiverPubX || null,
+    sender_pub_x: sender_pub_x || null,
+    receiver_pub_x: receiver_pub_x || null,
     createdAt: new Date().toISOString(),
   });
 }
