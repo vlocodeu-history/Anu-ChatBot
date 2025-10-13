@@ -293,6 +293,44 @@ export default function ChatPage() {
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64, peerId]);
 
+  // 🔁 Refresh the open thread when the tab becomes visible or window gains focus
+  useEffect(() => {
+    if (!peerId && !peerEmail) return;
+
+    const refreshNow = () => {
+      const id = peerId || peerEmail;
+      if (id) loadHistory(id).catch(console.error);
+    };
+
+    const onVis = () => {
+      if (document.visibilityState === 'visible') refreshNow();
+    };
+    const onFocus = () => refreshNow();
+
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', onFocus);
+
+    // initial refresh once when this effect mounts
+    refreshNow();
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [peerId, peerEmail]);
+
+  // ⏱️ Polling fallback: refresh history every 5s in case a socket event was missed
+  useEffect(() => {
+    if (!peerId && !peerEmail) return;
+
+    const timer = setInterval(() => {
+      const target = peerId || peerEmail;
+      if (target) loadHistory(target).catch(() => {});
+    }, 5_000); // 5 seconds
+
+    return () => clearInterval(timer);
+  }, [peerId, peerEmail]);
+
   // ensure we have a peer key right before sending
   async function ensurePeerKey(peerIdOrEmail: string, current: string): Promise<string> {
     let k = (current || '').trim();
