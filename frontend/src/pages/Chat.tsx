@@ -346,18 +346,21 @@ export default function ChatPage() {
       setItems((prev) => mergeMessages(prev, [incoming]));
     });
 
-    const offAck = onMessageSent(() => {
-      setItems((prev) => {
-        const copy = [...prev];
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].from === 'Me' && (copy[i].status === 'pending' || !copy[i].status)) {
-            copy[i] = { ...copy[i], status: 'delivered' };
-            break;
-          }
-        }
-        return copy;
-      });
-    });
+    const offAck = onMessageSent(({ messageId }) => {
+  setItems((prev) => {
+    const copy = [...prev];
+    for (let i = copy.length - 1; i >= 0; i--) {
+      const it = copy[i];
+      if (it.from === 'Me' && (it.status === 'pending' || !it.status)) {
+        // attach the server id so future history merges dedupe correctly
+        copy[i] = { ...it, status: 'delivered', id: messageId };
+        break;
+      }
+    }
+    return copy;
+  });
+});
+
 
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64, peerId]);
