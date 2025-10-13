@@ -13,7 +13,7 @@ import {
 import {
   onReceiveMessage,
   onMessageSent,
-  sendEncryptedMessage, // now includes receiver_pub_x param
+  sendEncryptedMessage, // includes receiver_pub_x param
   goOnline,
   type WireMsg as SocketWireMsg,
 } from '@/services/socket';
@@ -65,18 +65,18 @@ function mergeMessages(prev: ChatItem[], next: ChatItem[]): ChatItem[] {
   const byId = new Map<string, ChatItem>();
   const out: ChatItem[] = [];
 
-  // seed with prev
   for (const m of prev) {
     if (m.id) byId.set(m.id, m);
     out.push(m);
   }
 
-  // merge next
   for (const n of next) {
     if (n.id && byId.has(n.id)) {
       const old = byId.get(n.id)!;
-      // keep the better (plaintext) text if new one failed to decrypt
-      const betterText = (old.text && old.text !== '[encrypted]' && n.text === '[encrypted]') ? old.text : n.text;
+      const betterText =
+        old.text && old.text !== '[encrypted]' && n.text === '[encrypted]'
+          ? old.text
+          : n.text;
       const merged: ChatItem = { ...old, ...n, text: betterText };
       byId.set(n.id, merged);
       const idx = out.findIndex((x) => x.id === n.id);
@@ -85,12 +85,10 @@ function mergeMessages(prev: ChatItem[], next: ChatItem[]): ChatItem[] {
       byId.set(n.id, n);
       out.push(n);
     } else {
-      // no id (shouldn't happen for stored history), just push if not duplicate of last
       out.push(n);
     }
   }
 
-  // sort by timestamp
   out.sort((a, b) => (a.at > b.at ? 1 : a.at < b.at ? -1 : 0));
   return out;
 }
@@ -169,7 +167,7 @@ export default function ChatPage() {
   const token = localStorage.getItem('token') || '';
   const me = safeJson<Me>(localStorage.getItem('me')) || { id: '', email: '' };
 
-  // theme (named themes, still compatible with your dark class)
+  // THEME
   const themeOptions = Object.keys(THEMES) as Array<keyof typeof THEMES>;
   const [themeName, setThemeName] = useState<keyof typeof THEMES>(() =>
     (localStorage.getItem('themeName') as keyof typeof THEMES) || 'Classic Light'
@@ -179,7 +177,6 @@ export default function ChatPage() {
     localStorage.setItem('themeName', themeName);
   }, [themeName]);
 
-  // Keep a simple dark toggle behaving like before:
   const isDark = !!THEMES[themeName].dark;
   const toggleDark = () => {
     setThemeName((prev) => (THEMES[prev].dark ? 'Classic Light' : 'Slate Dark') as keyof typeof THEMES);
@@ -193,8 +190,8 @@ export default function ChatPage() {
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [filter, setFilter] = useState('');
 
-  const [peerId, setPeerId] = useState('');
-  const [peerEmail, setPeerEmail] = useState('');
+  const [peerId, setPeerId] = useState('');       // selected peer unique id (uuid or email)
+  const [peerEmail, setPeerEmail] = useState(''); // selected peer email
   const [peerPubX, setPeerPubX] = useState('');
 
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -207,7 +204,7 @@ export default function ChatPage() {
   // Track the currently loading thread to avoid stale overwrites
   const currentThreadKeyRef = useRef<string>('');
 
-  // announce presence
+  // announce presence (publishes my current pubX so others can encrypt to me)
   useEffect(() => {
     if ((me.id || me.email) && myPublicB64) {
       goOnline(me.id || me.email, me.email, myPublicB64);
@@ -242,9 +239,7 @@ export default function ChatPage() {
 
     try {
       const history = await getMessages(me.id || me.email, peerEmailOrId);
-
-      // if user switched threads while we were fetching, ignore this response
-      if (currentThreadKeyRef.current !== threadKey) return;
+      if (currentThreadKeyRef.current !== threadKey) return; // ignore stale
 
       const mapped: ChatItem[] = (history || []).map((m: any) => {
         const payload: WireCipher | null =
@@ -254,6 +249,7 @@ export default function ChatPage() {
 
         const iAmSender = [me.id, me.email].includes(m.senderId);
 
+        // prefer keys stored with message
         const first = iAmSender ? (m.receiver_pub_x || peerPubX) : (m.sender_pub_x || peerPubX);
         const candidates = [
           first,
@@ -275,10 +271,9 @@ export default function ChatPage() {
         };
       });
 
-      // merge instead of replace
       setItems((prev) => mergeMessages(prev, mapped));
     } catch (e) {
-      // Do NOT clear on error; keep current items visible
+      // keep current list on failure
       console.warn('loadHistory failed:', (e as any)?.message || e);
     }
   }
@@ -301,8 +296,7 @@ export default function ChatPage() {
       }
     }
     setPeerPubX(key);
-    setSidebarOpen(false);
-    setItems([]); // starting fresh view for this peer
+    // IMPORTANT: don't wipe items here; wait for history to merge in
     await loadHistory(id);
   }
 
@@ -312,14 +306,17 @@ export default function ChatPage() {
 
     const offRecv = onReceiveMessage((m: WireMsg) => {
       const myIds = [me.id, me.email].filter(Boolean);
+
+      // must involve me at all
       const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
       if (!involvesMe) return;
 
-      // only if belongs to the selected peer
+      // does it belong to the currently opened peer? (match against both peerId and peerEmail)
       const otherParty = myIds.includes(m.senderId) ? m.receiverId : m.senderId;
-      if (otherParty !== (peerId || peerEmail)) return;
+      const selectedKeys = [peerId, peerEmail].filter(Boolean);
+      if (!selectedKeys.includes(otherParty)) return;
 
-      // skip echo of my own outbound message
+      // skip echo of my own outbound message (socket also shows message:received to sender sometimes)
       const isFromMe = myIds.includes(m.senderId);
       if (isFromMe) return;
 
@@ -365,7 +362,7 @@ export default function ChatPage() {
     return () => { offRecv(); offAck(); };
   }, [me.id, me.email, peerEmail, peerPubX, mySecretB64, peerId]);
 
-  // Refresh when tab visible or window focused
+  // refresh when tab visible or window focused
   useEffect(() => {
     if (!peerId && !peerEmail) return;
 
@@ -389,7 +386,7 @@ export default function ChatPage() {
     };
   }, [peerId, peerEmail]);
 
-  // Polling fallback: refresh history every 5s (merge, never wipe)
+  // polling fallback: refresh history every 5s (merge, never wipe)
   useEffect(() => {
     if (!peerId && !peerEmail) return;
     const timer = setInterval(() => {
