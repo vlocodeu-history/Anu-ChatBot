@@ -1,4 +1,3 @@
-// frontend/src/pages/Chat.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -12,7 +11,7 @@ import {
 import {
   onReceiveMessage,
   onMessageSent,
-  sendEncryptedMessage,
+  sendEncryptedMessage,      // socket sender (can accept extra args safely)
   goOnline,
   type WireMsg as SocketWireMsg,
 } from '@/services/socket';
@@ -25,6 +24,7 @@ import {
 } from '@/services/e2ee';
 
 import { getPublicKey, getMessages } from '@/services/api';
+import type { Message, WireCipher } from '@/types/message';
 
 import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
@@ -34,7 +34,6 @@ import MessageInput from '@/components/MessageInput';
 
 type Me = { id: string; email: string };
 type WireMsg = SocketWireMsg;
-type WireCipher = { nonce: string; cipher: string };
 type LocalStatus = 'pending' | 'delivered' | 'failed';
 
 const safeJson = <T,>(s: string | null): T | null => {
@@ -187,20 +186,21 @@ export default function ChatPage() {
         const payload = safeJson<WireCipher>(m.encryptedContent);
         const iAmSender = [me.id, me.email].includes(m.senderId);
 
-        // ✅ choose key order per message
-        const first = iAmSender ? peerPubX : m.senderPubX;
+        // Prefer keys saved with the message itself
+        const first = iAmSender ? (m.receiverPubX || peerPubX) : (m.senderPubX || peerPubX);
         const candidates = [
           first,
           // fallbacks
-          iAmSender ? m.senderPubX : peerPubX,
+          iAmSender ? m.senderPubX : m.receiverPubX,
           localStorage.getItem(`pubkey:${m.senderId}`),
           localStorage.getItem(`pubkey:${m.receiverId}`),
           localStorage.getItem(`pubkey:${peerEmail}`),
+          peerPubX,
         ];
 
         const text = tryDecryptWithAny(payload, mySecretB64, candidates);
         const from = iAmSender ? 'Me' : (peerEmail || m.senderId);
-        return { from, text: text ?? '[encrypted]', at: m.createdAt, status: text ? 'delivered' : 'failed' };
+        return { from, text: text ?? '[encrypted]', at: m.createdAt || new Date().toISOString(), status: text ? 'delivered' : 'failed' };
       });
       setItems(mapped);
     } catch {
@@ -239,17 +239,18 @@ export default function ChatPage() {
       const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
       if (!involvesMe) return;
 
-      // ✅ only if belongs to the selected peer
+      // only if belongs to the selected peer
       const otherParty = myIds.includes(m.senderId) ? m.receiverId : m.senderId;
       if (otherParty !== (peerId || peerEmail)) return;
 
-      // ✅ skip echo of my own outbound message
+      // skip echo of my own outbound message
       const isFromMe = myIds.includes(m.senderId);
       if (isFromMe) return;
 
-      const payload = safeJson<WireCipher>(m.encryptedContent);
+      const payload = safeJson<WireCipher>(m.encryptedContent as any);
       const candidates = [
-        m.senderPubX,               // sender key first: they encrypted to my pub
+        (m as any).senderPubX,
+        (m as any).receiverPubX,
         peerPubX,
         localStorage.getItem(`pubkey:${m.senderId}`),
         localStorage.getItem(`pubkey:${m.receiverId}`),
@@ -262,7 +263,7 @@ export default function ChatPage() {
         {
           from: peerEmail || m.senderId,
           text: text ?? '[encrypted]',
-          at: m.createdAt || new Date().toISOString(),
+          at: (m as any).createdAt || new Date().toISOString(),
           status: text ? 'delivered' : 'failed',
         },
       ]);
@@ -343,8 +344,9 @@ export default function ChatPage() {
     setItems((prev) => [...prev, { from: 'Me', text, at: new Date().toISOString(), status: 'pending' }]);
 
     try {
-      // include my pubX so the peer can decrypt
-      sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64);
+      // include BOTH public keys so receivers (and your own history) can always decrypt
+      // If your socket sender ignores extra args, that's fine.
+      (sendEncryptedMessage as any)(sender, receiver, ciphertext, myPublicB64, effectivePeerPubX);
     } catch {
       setItems((prev) => {
         const copy = [...prev];
