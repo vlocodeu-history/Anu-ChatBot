@@ -33,10 +33,10 @@ const REDIS_URL = process.env.REDIS_URL || '';
 
 /* ------------------- In-memory registries (demo) ------------------------ */
 const latestPubKeyByUser = new Map(); // userId|email -> pubX
-const contactsByUser   = new Map();
+const contactsByUser   = new Map();   // fallback when Supabase missing
 const userSocketMap    = new Map();   // userId|email -> socketId
 const socketUserMap    = new Map();   // socketId -> userId|email
-const messagesInMemory = []; // demo/history when Supabase is absent
+const messagesInMemory = []; // history fallback when Supabase is absent
 
 /* -------------------------------- Express -------------------------------- */
 const app = express();
@@ -61,7 +61,7 @@ app.use(cors({
   credentials: true,
 }));
 
-// 🔴 Parse body BEFORE routes
+// parse body BEFORE routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -69,29 +69,110 @@ app.use(cookieParser());
 /* --------------------------------- Routes -------------------------------- */
 app.use('/api/auth', authRoutes);
 
-/* Contacts (demo) */
-app.get('/api/users/contacts', (req, res) => {
-  const owner = req.header('x-user') || req.query.owner;
-  if (!owner) return res.status(400).json({ error: 'owner missing' });
-  res.json(contactsByUser.get(owner) || []);
+/* ------------------------------ Contacts API ----------------------------- */
+/** GET /api/users/contacts?owner=<email|uuid>  (or header x-user) */
+app.get('/api/users/contacts', async (req, res) => {
+  const ownerKey = req.header('x-user') || req.query.owner;
+  if (!ownerKey) return res.status(400).json({ error: 'owner missing' });
+
+  if (!supabase) {
+    return res.json(contactsByUser.get(ownerKey) || []);
+  }
+
+  try {
+    const owner_id = await resolveDbUserId(ownerKey);
+    if (!owner_id) return res.json([]);
+
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('peer_email,nickname,created_at')
+      .eq('owner_id', owner_id)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    const items = (data || []).map(r => ({
+      id: r.peer_email,         // use email as stable key for now
+      email: r.peer_email,
+      nickname: r.nickname || null,
+      created_at: r.created_at
+    }));
+    return res.json(items);
+  } catch (e) {
+    console.error('contacts GET error:', e?.message || e);
+    return res.status(500).json({ error: 'failed' });
+  }
 });
-app.post('/api/users/contacts', (req, res) => {
-  const owner = req.header('x-user') || req.body.owner;
+
+/** POST /api/users/contacts  body: { owner, email, nickname? } */
+app.post('/api/users/contacts', async (req, res) => {
+  const ownerKey = req.header('x-user') || req.body.owner;
   const { email, nickname } = req.body || {};
-  if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
-  const list = contactsByUser.get(owner) || [];
-  if (!list.find(c => c.email === email)) list.push({ email, nickname });
-  contactsByUser.set(owner, list);
-  res.json(list);
+  if (!ownerKey || !email) return res.status(400).json({ error: 'owner/email required' });
+
+  if (!supabase) {
+    const list = contactsByUser.get(ownerKey) || [];
+    if (!list.find(c => c.email === email)) list.push({ email, nickname });
+    contactsByUser.set(ownerKey, list);
+    return res.json(list);
+  }
+
+  try {
+    const owner_id = await resolveDbUserId(ownerKey);
+    if (!owner_id) return res.status(400).json({ error: 'owner not found' });
+
+    const row = { owner_id, peer_email: String(email).toLowerCase(), nickname: nickname || null };
+    const { error } = await supabase.from('contacts').upsert(row, { onConflict: 'owner_id,peer_email' });
+    if (error) throw error;
+
+    const { data } = await supabase
+      .from('contacts')
+      .select('peer_email,nickname,created_at')
+      .eq('owner_id', owner_id)
+      .order('created_at', { ascending: true });
+
+    const items = (data || []).map(r => ({
+      id: r.peer_email,
+      email: r.peer_email,
+      nickname: r.nickname || null,
+      created_at: r.created_at
+    }));
+    return res.json(items);
+  } catch (e) {
+    console.error('contacts POST error:', e?.message || e);
+    return res.status(500).json({ error: 'failed' });
+  }
 });
-app.delete('/api/users/contacts', (req, res) => {
-  const owner = req.header('x-user') || req.query.owner || req.body.owner;
+
+/** DELETE /api/users/contacts?owner=<>&email=<>  (or body) */
+app.delete('/api/users/contacts', async (req, res) => {
+  const ownerKey = req.header('x-user') || req.query.owner || req.body.owner;
   const email = req.query.email || req.body.email;
-  if (!owner || !email) return res.status(400).json({ error: 'owner/email required' });
-  const list = contactsByUser.get(owner) || [];
-  const next = list.filter(c => c.email !== email);
-  contactsByUser.set(owner, next);
-  res.json({ ok: true });
+  if (!ownerKey || !email) return res.status(400).json({ error: 'owner/email required' });
+
+  if (!supabase) {
+    const list = contactsByUser.get(ownerKey) || [];
+    const next = list.filter(c => c.email !== email);
+    contactsByUser.set(ownerKey, next);
+    return res.json({ ok: true });
+  }
+
+  try {
+    const owner_id = await resolveDbUserId(ownerKey);
+    if (!owner_id) return res.json({ ok: true });
+
+    const { error } = await supabase
+      .from('contacts')
+      .delete()
+      .eq('owner_id', owner_id)
+      .eq('peer_email', String(email).toLowerCase());
+    if (error) throw error;
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('contacts DELETE error:', e?.message || e);
+    return res.status(500).json({ error: 'failed' });
+  }
 });
 
 /* Health */
@@ -101,9 +182,20 @@ app.get('/health', (_req, res) =>
 );
 
 /* Public key lookup for E2EE */
-app.get('/api/users/public-key', (req, res) => {
+app.get('/api/users/public-key', async (req, res) => {
   const user = (req.query.user || '').toString();
-  const pub = latestPubKeyByUser.get(user) || null;
+  let pub = latestPubKeyByUser.get(user) || latestPubKeyByUser.get(user.toLowerCase()) || null;
+
+  if (!pub && supabase) {
+    try {
+      const { data } = await supabase
+        .from('users')
+        .select('public_x')
+        .or(`id.eq.${user},email.eq.${user}`)
+        .maybeSingle();
+      pub = data?.public_x || null;
+    } catch {}
+  }
   res.json({ public_x: pub });
 });
 
@@ -210,7 +302,7 @@ io.on('connection', (socket) => {
   const say = (msg, ...a) => console.log(`[${socket.id}] ${msg}`, ...a);
   say('connected');
 
-  // ✅ store pubX under BOTH userId and email (so lookups by either work)
+  // Store pubX under BOTH userId and email (lookups by either work)
   socket.on('user:online', ({ userId, email, pubX } = {}) => {
     const userKey = userId || email;
     if (!userKey) return;
@@ -221,21 +313,21 @@ io.on('connection', (socket) => {
 
     if (pubX) {
       if (userId) latestPubKeyByUser.set(String(userId), pubX);
-      if (email)  latestPubKeyByUser.set(String(email),  pubX);
+      if (email)  latestPubKeyByUser.set(String(email).toLowerCase(),  pubX);
     }
 
     say(`online as ${userKey}`);
     flushOfflineQueue(userKey, socket).catch(console.error);
   });
 
-  // 🔑 accept & pass-through receiver_pub_x (fill it if missing)
+  // Accept & pass-through receiver_pub_x (fill it if missing)
   socket.on('message:send', async ({
     senderId, receiverId, encryptedContent, sender_pub_x, receiver_pub_x
   } = {}) => {
     try {
       if (!senderId || !receiverId || !encryptedContent) return;
 
-      // try to fill missing receiver_pub_x
+      // Fill missing receiver_pub_x
       let finalreceiver_pub_x = receiver_pub_x ?? null;
       if (!finalreceiver_pub_x) {
         finalreceiver_pub_x =
@@ -243,7 +335,6 @@ io.on('connection', (socket) => {
           latestPubKeyByUser.get(String(receiverId).toLowerCase()) ??
           null;
 
-        // optional DB lookup if users table stores public_x
         if (!finalreceiver_pub_x && supabase) {
           const { data: u } = await supabase
             .from('users')
@@ -260,7 +351,7 @@ io.on('connection', (socket) => {
         receiverId,
         encryptedContent,
         sender_pub_x: sender_pub_x ?? null,
-        receiver_pub_x: finalreceiver_pub_x, // ✅ include on the wire
+        receiver_pub_x: finalreceiver_pub_x,
         createdAt: new Date().toISOString(),
       };
 
@@ -280,7 +371,7 @@ io.on('connection', (socket) => {
         statusForDb = 'sent';
       }
 
-      // persist (save both keys)
+      // persist
       persistMessageToSupabase({ ...msg, status: statusForDb }).catch(() => {});
       messagesInMemory.push(msg);
       if (messagesInMemory.length > 5000) messagesInMemory.shift();
@@ -373,7 +464,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
 
     const bucket = (process.env.SUPABASE_UPLOAD_BUCKET || 'uploads').trim();
 
-    // ✅ preserve original filename inside chat/ folder
+    // preserve original filename inside chat/ folder
     const safeName = sanitizeFilename(file.originalname);
     const key = `chat/${safeName}`;
     console.log('UPLOAD usingKey=', key, 'original=', file.originalname);
@@ -382,7 +473,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       .from(bucket)
       .upload(key, file.buffer, {
         contentType: file.mimetype || 'application/octet-stream',
-        upsert: true, // overwrite same name; set false if you want 409 on duplicate
+        upsert: true,
       });
 
     if (upErr && !/The resource already exists/i.test(upErr.message)) throw upErr;
