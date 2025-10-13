@@ -1,4 +1,3 @@
-// frontend/src/services/socket.ts
 import { io, Socket } from "socket.io-client";
 
 const SOCKET_ORIGIN =
@@ -28,7 +27,8 @@ export type WireMsg = {
   senderId: string;
   receiverId: string;
   encryptedContent: string;   // stringified {"nonce","cipher"}
-  senderPubX?: string;        // peer's pub key
+  senderPubX?: string | null; // sender's pubkey at time of send
+  receiverPubX?: string | null; // receiver's pubkey at time of send
   createdAt?: string;
 };
 
@@ -44,15 +44,23 @@ export function onMessageSent(handler: (ack: { messageId: string }) => void) {
   return () => s.off("message:ack", handler);
 }
 
-// ✅ includes senderPubX so peers can decrypt on first contact
+// ✅ include BOTH public keys so history can always decrypt
 export function sendEncryptedMessage(
   senderId: string,
   receiverId: string,
   encryptedContent: string,
-  senderPubX?: string
+  senderPubX?: string,
+  receiverPubX?: string
 ) {
   const s = getSocket();
-  s.emit("message:send", { senderId, receiverId, encryptedContent, senderPubX });
+  s.emit("message:send", {
+    senderId,
+    receiverId,
+    encryptedContent,
+    senderPubX: senderPubX || null,
+    receiverPubX: receiverPubX || null,
+    createdAt: new Date().toISOString(),
+  });
 }
 
 // Announces presence + publishes my current pubX
