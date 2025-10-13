@@ -183,7 +183,11 @@ export default function ChatPage() {
     try {
       const history = await getMessages(me.id || me.email, peerEmailOrId);
       const mapped = (history || []).map((m: any) => {
-        const payload = safeJson<WireCipher>(m.encryptedContent);
+        const payload: WireCipher | null =
+          typeof m.encryptedContent === 'string'
+            ? safeJson<WireCipher>(m.encryptedContent)
+            : (m.encryptedContent as any) || null;
+
         const iAmSender = [me.id, me.email].includes(m.senderId);
 
         // Prefer keys saved with the message itself
