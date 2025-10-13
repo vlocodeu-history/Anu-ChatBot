@@ -1,3 +1,4 @@
+// frontend/src/services/socket.ts
 import { io, Socket } from "socket.io-client";
 
 const SOCKET_ORIGIN =
@@ -6,6 +7,16 @@ const SOCKET_ORIGIN =
   "";
 
 let socket: Socket | null = null;
+
+export type WireMsg = {
+  id: string;
+  senderId: string;               // may be uuid or email
+  receiverId: string;             // may be uuid or email
+  encryptedContent: string;       // stringified {"nonce","cipher"}
+  sender_pub_x?: string | null;   // snake_case on the wire
+  receiver_pub_x?: string | null; // snake_case on the wire
+  createdAt?: string;
+};
 
 export function getSocket(): Socket {
   if (socket) return socket;
@@ -22,16 +33,6 @@ export function getSocket(): Socket {
   return socket;
 }
 
-export type WireMsg = {
-  id: string;
-  senderId: string;
-  receiverId: string;
-  encryptedContent: string;   // stringified {"nonce","cipher"}
-  sender_pub_x?: string | null; // sender's pubkey at time of send
-  receiver_pub_x?: string | null; // receiver's pubkey at time of send
-  createdAt?: string;
-};
-
 export function onReceiveMessage(handler: (msg: WireMsg) => void) {
   const s = getSocket();
   s.on("message:received", handler);
@@ -44,7 +45,7 @@ export function onMessageSent(handler: (ack: { messageId: string }) => void) {
   return () => s.off("message:ack", handler);
 }
 
-// ✅ include BOTH public keys so history can always decrypt
+// Include BOTH pub keys so history can always decrypt
 export function sendEncryptedMessage(
   senderId: string,
   receiverId: string,
@@ -68,3 +69,4 @@ export function goOnline(userId: string, email: string, pubX: string) {
   const s = getSocket();
   s.emit("user:online", { userId, email, pubX });
 }
+
