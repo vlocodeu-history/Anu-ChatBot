@@ -1,25 +1,39 @@
+// backend/server/routes/messages.js
 import express from 'express';
 import { supabase } from '../config/supabase.js';
 
 const router = express.Router();
 
 /**
- * GET /api/messages/thread?peerId=<uuid>&limit=50&before=<ISO>
+ * GET /api/messages/thread?peerId=<uuid-or-email>&limit=50&before=<ISO>
  * Returns the conversation between the current user and peerId.
- * Pagination: pass ?before=<ISO created_at> to page older messages.
+ * Includes senderPubX & receiverPubX so the client can always decrypt.
  */
 router.get('/thread', async (req, res) => {
-  const me = req.user.userId;
+  const me = req.user.userId; // set by your auth middleware
   const { peerId, limit = '50', before } = req.query;
 
+  if (!me) return res.status(401).json({ message: 'Unauthorized' });
   if (!peerId) return res.status(400).json({ message: 'peerId is required' });
+
   const pageSize = Math.min(parseInt(limit, 10) || 50, 200);
 
   try {
     let q = supabase
       .from('messages')
-      .select('id, sender_id, receiver_id, encrypted_content, created_at')
-      .or(`and(sender_id.eq.${me},receiver_id.eq.${peerId}),and(sender_id.eq.${peerId},receiver_id.eq.${me})`)
+      .select(`
+        id,
+        sender_id,
+        receiver_id,
+        encrypted_content,
+        sender_pub_x,
+        receiver_pub_x,
+        created_at
+      `)
+      .or(
+        `and(sender_id.eq.${me},receiver_id.eq.${peerId}),
+         and(sender_id.eq.${peerId},receiver_id.eq.${me})`
+      )
       .order('created_at', { ascending: false })
       .limit(pageSize);
 
@@ -28,8 +42,20 @@ router.get('/thread', async (req, res) => {
     const { data, error } = await q;
     if (error) throw error;
 
-    // Return oldest->newest for easier rendering
-    res.json({ items: (data || []).reverse() });
+    // Map to camelCase & return oldest -> newest
+    const items = (data || [])
+      .reverse()
+      .map(m => ({
+        id: m.id,
+        senderId: m.sender_id,
+        receiverId: m.receiver_id,
+        encryptedContent: m.encrypted_content,
+        senderPubX: m.sender_pub_x ?? null,
+        receiverPubX: m.receiver_pub_x ?? null,
+        createdAt: m.created_at,
+      }));
+
+    res.json({ items });
   } catch (err) {
     console.error('Thread fetch error:', err);
     res.status(500).json({ message: 'Failed to load thread', details: err.message });
@@ -45,17 +71,23 @@ router.get('/inbox', async (req, res) => {
   const pageSize = Math.min(parseInt(req.query.limit, 10) || 100, 300);
 
   try {
-    // Get recent messages involving me
     const { data, error } = await supabase
       .from('messages')
-      .select('id, sender_id, receiver_id, encrypted_content, created_at')
+      .select(`
+        id,
+        sender_id,
+        receiver_id,
+        encrypted_content,
+        sender_pub_x,
+        receiver_pub_x,
+        created_at
+      `)
       .or(`sender_id.eq.${me},receiver_id.eq.${me}`)
       .order('created_at', { ascending: false })
-      .limit(Math.max(pageSize * 2, 200)); // oversample to aggregate
+      .limit(Math.max(pageSize * 2, 200));
 
     if (error) throw error;
 
-    // Keep the most recent message per-peer
     const latestByPeer = new Map();
     for (const m of data || []) {
       const peer = m.sender_id === me ? m.receiver_id : m.sender_id;
@@ -65,7 +97,15 @@ router.get('/inbox', async (req, res) => {
     res.json({
       items: Array.from(latestByPeer.entries()).slice(0, pageSize).map(([peerId, m]) => ({
         peerId,
-        lastMessage: m
+        lastMessage: {
+          id: m.id,
+          senderId: m.sender_id,
+          receiverId: m.receiver_id,
+          encryptedContent: m.encrypted_content,
+          senderPubX: m.sender_pub_x ?? null,
+          receiverPubX: m.receiver_pub_x ?? null,
+          createdAt: m.created_at,
+        }
       }))
     });
   } catch (err) {
