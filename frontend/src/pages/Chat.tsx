@@ -12,7 +12,7 @@ import {
 import {
   onReceiveMessage,
   onMessageSent,
-  sendEncryptedMessage,      // now includes receiver_pub_x param
+  sendEncryptedMessage, // now includes receiver_pub_x param
   goOnline,
   type WireMsg as SocketWireMsg,
 } from '@/services/socket';
@@ -25,7 +25,7 @@ import {
 } from '@/services/e2ee';
 
 import { getPublicKey, getMessages } from '@/services/api';
-import type { Message, WireCipher } from '@/types/message';
+import type { WireCipher } from '@/types/message';
 
 import AppShell from '@/components/AppShell';
 import ContactItem from '@/components/ContactItem';
@@ -125,8 +125,7 @@ export default function ChatPage() {
   const token = localStorage.getItem('token') || '';
   const me = safeJson<Me>(localStorage.getItem('me')) || { id: '', email: '' };
 
-  // theme
-  // theme (named themes, still compatible with your dark class)
+  /* ----------------------------- THEME --------------------------------- */
   const themeOptions = Object.keys(THEMES) as Array<keyof typeof THEMES>;
   const [themeName, setThemeName] = useState<keyof typeof THEMES>(() =>
     (localStorage.getItem('themeName') as keyof typeof THEMES) || 'Classic Light'
@@ -136,16 +135,13 @@ export default function ChatPage() {
     localStorage.setItem('themeName', themeName);
   }, [themeName]);
 
-  // Keep a simple dark toggle behaving like before:
   const isDark = !!THEMES[themeName].dark;
   const toggleDark = () => {
-    // flip between the closest light/dark variants without changing other choices
     setThemeName((prev) => {
       const next = THEMES[prev].dark ? 'Classic Light' : 'Slate Dark';
       return next as keyof typeof THEMES;
     });
   };
-
 
   useEffect(() => {
     if (!token || (!me.id && !me.email)) navigate('/login', { replace: true });
@@ -166,8 +162,9 @@ export default function ChatPage() {
   const mySecretB64 = (myKeys as any)?.secretKeyB64 || (myKeys as any)?.secretKey || '';
   const myPublicB64 = (myKeys as any)?.publicKeyB64 || (myKeys as any)?.public_x || (myKeys as any)?.publicKey || '';
 
-  // announce presence
+  /* Announce presence + cache my current pubkey for comparison */
   useEffect(() => {
+    if (myPublicB64) localStorage.setItem('pubkey:self', myPublicB64);
     if ((me.id || me.email) && myPublicB64) {
       goOnline(me.id || me.email, me.email, myPublicB64);
     }
@@ -210,7 +207,6 @@ export default function ChatPage() {
         const first = iAmSender ? (m.receiver_pub_x || peerPubX) : (m.sender_pub_x || peerPubX);
         const candidates = [
           first,
-          // fallbacks
           iAmSender ? m.sender_pub_x : m.receiver_pub_x,
           localStorage.getItem(`pubkey:${m.senderId}`),
           localStorage.getItem(`pubkey:${m.receiverId}`),
@@ -220,11 +216,21 @@ export default function ChatPage() {
 
         const text = tryDecryptWithAny(payload, mySecretB64, candidates);
         const from = iAmSender ? 'Me' : (peerEmail || m.senderId);
-        return { from, text: text ?? '[encrypted]', at: m.createdAt || new Date().toISOString(), status: text ? 'delivered' : 'failed' };
+        return {
+          from,
+          text: text ?? '[encrypted]',
+          at: m.createdAt || new Date().toISOString(),
+          status: text ? 'delivered' : 'failed',
+        };
       });
-      setItems(mapped);
+
+      // ✅ Preserve local pending messages so polling doesn’t wipe them
+      setItems((prev) => {
+        const pend = prev.filter(p => p.from === 'Me' && p.status === 'pending');
+        return [...mapped, ...pend];
+      });
     } catch {
-      setItems([]);
+      // keep current UI if history fails
     }
   }
 
@@ -250,37 +256,56 @@ export default function ChatPage() {
     await loadHistory(id);
   }
 
-  // live messages
+  /* --------------------------- Live messages ---------------------------- */
   useEffect(() => {
     if (!mySecretB64) return;
 
-    const offRecv = onReceiveMessage((m: WireMsg) => {
+    const offRecv = onReceiveMessage(async (m: WireMsg) => {
       const myIds = [me.id, me.email].filter(Boolean);
       const involvesMe = myIds.includes(m.receiverId) || myIds.includes(m.senderId);
       if (!involvesMe) return;
 
-      // only if belongs to the selected peer
       const otherParty = myIds.includes(m.senderId) ? m.receiverId : m.senderId;
       if (otherParty !== (peerId || peerEmail)) return;
 
       // skip echo of my own outbound message
-      const isFromMe = myIds.includes(m.senderId);
-      if (isFromMe) return;
+      if (myIds.includes(m.senderId)) return;
 
       const payload: WireCipher | null =
         typeof m.encryptedContent === 'string'
           ? safeJson<WireCipher>(m.encryptedContent as any)
           : (m.encryptedContent as any) || null;
 
-      const candidates = [
+      let text = tryDecryptWithAny(payload, mySecretB64, [
         (m as any).sender_pub_x,
         (m as any).receiver_pub_x,
         peerPubX,
         localStorage.getItem(`pubkey:${m.senderId}`),
         localStorage.getItem(`pubkey:${m.receiverId}`),
         localStorage.getItem(`pubkey:${peerEmail}`),
-      ];
-      const text = tryDecryptWithAny(payload, mySecretB64, candidates);
+      ]);
+
+      // ❗ If decryption failed, refresh the peer key and retry once
+      if (!text) {
+        try {
+          const fresh = await getPublicKey(otherParty);
+          const freshPub = (fresh?.public_x || '').trim();
+          if (freshPub) {
+            localStorage.setItem(`pubkey:${otherParty}`, freshPub);
+            if (freshPub !== peerPubX) setPeerPubX(freshPub);
+            text = tryDecryptWithAny(payload, mySecretB64, [
+              (m as any).sender_pub_x,
+              freshPub,
+            ]);
+          }
+        } catch {}
+      }
+
+      // If the sender targeted an old key of mine, re-announce my current key
+      const myCurrentPub = localStorage.getItem('pubkey:self') || myPublicB64;
+      if ((m as any).receiver_pub_x && myCurrentPub && (m as any).receiver_pub_x !== myCurrentPub) {
+        goOnline(me.id || me.email, me.email, myCurrentPub);
+      }
 
       setItems((prev) => [
         ...prev,
@@ -307,9 +332,9 @@ export default function ChatPage() {
     });
 
     return () => { offRecv(); offAck(); };
-  }, [me.id, me.email, peerEmail, peerPubX, mySecretB64, peerId]);
+  }, [me.id, me.email, peerEmail, peerPubX, mySecretB64, peerId, myPublicB64]);
 
-  // 🔁 Refresh the open thread when the tab becomes visible or window gains focus
+  /* Refresh thread on focus/visibility */
   useEffect(() => {
     if (!peerId && !peerEmail) return;
 
@@ -318,15 +343,11 @@ export default function ChatPage() {
       if (id) loadHistory(id).catch(console.error);
     };
 
-    const onVis = () => {
-      if (document.visibilityState === 'visible') refreshNow();
-    };
+    const onVis = () => { if (document.visibilityState === 'visible') refreshNow(); };
     const onFocus = () => refreshNow();
 
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('focus', onFocus);
-
-    // initial refresh once when this effect mounts
     refreshNow();
 
     return () => {
@@ -335,49 +356,42 @@ export default function ChatPage() {
     };
   }, [peerId, peerEmail]);
 
-  // ⏱️ Polling fallback: refresh history every 5s in case a socket event was missed
+  /* Polling fallback every 5s */
   useEffect(() => {
     if (!peerId && !peerEmail) return;
-
     const timer = setInterval(() => {
       const target = peerId || peerEmail;
       if (target) loadHistory(target).catch(() => {});
-    }, 5_000); // 5 seconds
-
+    }, 5_000);
     return () => clearInterval(timer);
   }, [peerId, peerEmail]);
 
-  // ensure we have a peer key right before sending
-  async function ensurePeerKey(peerIdOrEmail: string, current: string): Promise<string> {
-    let k = (current || '').trim();
-    if (k) return k;
-
-    k =
-      localStorage.getItem(`pubkey:${peerIdOrEmail}`) ||
-      localStorage.getItem(`pubkey:${peerEmail}`) ||
-      '';
-
-    if (k) return k;
-
+  /* Fresh key before sending; fall back to cache only if needed */
+  async function ensurePeerKey(peerIdOrEmail: string): Promise<string> {
     try {
       const res = await getPublicKey(peerIdOrEmail);
-      if (res?.public_x) {
-        localStorage.setItem(`pubkey:${peerIdOrEmail}`, res.public_x);
-        return res.public_x;
+      const k = (res?.public_x || '').trim();
+      if (k) {
+        localStorage.setItem(`pubkey:${peerIdOrEmail}`, k);
+        return k;
       }
     } catch (e) {
       console.warn('getPublicKey failed', e);
     }
-    return '';
+    return (
+      localStorage.getItem(`pubkey:${peerIdOrEmail}`) ||
+      localStorage.getItem(`pubkey:${peerEmail}`) ||
+      ''
+    );
   }
 
-  // poll for missing key every 10s until it appears
+  // Poll for missing key every 10s until it appears
   useEffect(() => {
     if (!peerEmail) return;
     if (peerPubX) return;
 
     const id = setInterval(async () => {
-      const k = await ensurePeerKey(peerId || peerEmail, '');
+      const k = await ensurePeerKey(peerId || peerEmail);
       if (k) setPeerPubX(k);
     }, 10_000);
 
@@ -389,7 +403,7 @@ export default function ChatPage() {
     if (!text || !peerEmail) return;
 
     const effectivePeerId = peerId || peerEmail;
-    const effectivePeerPubX = await ensurePeerKey(effectivePeerId, peerPubX);
+    const effectivePeerPubX = await ensurePeerKey(effectivePeerId);
 
     if (!effectivePeerPubX) {
       alert('Your contact has not opened the app yet, so we do not have their public key to encrypt. Ask them to open the app once, then try again.');
