@@ -210,6 +210,7 @@ io.on('connection', (socket) => {
   const say = (msg, ...a) => console.log(`[${socket.id}] ${msg}`, ...a);
   say('connected');
 
+  // ✅ store pubX under BOTH userId and email (so lookups by either work)
   socket.on('user:online', ({ userId, email, pubX } = {}) => {
     const userKey = userId || email;
     if (!userKey) return;
@@ -219,19 +220,39 @@ io.on('connection', (socket) => {
     socketUserMap.set(socket.id, userKey);
 
     if (pubX) {
-      latestPubKeyByUser.set(userKey, pubX);
+      if (userId) latestPubKeyByUser.set(String(userId), pubX);
+      if (email)  latestPubKeyByUser.set(String(email),  pubX);
     }
 
     say(`online as ${userKey}`);
     flushOfflineQueue(userKey, socket).catch(console.error);
   });
 
-  // 🔑 FIX: accept & pass-through receiverPubX
+  // 🔑 accept & pass-through receiverPubX (fill it if missing)
   socket.on('message:send', async ({
     senderId, receiverId, encryptedContent, senderPubX, receiverPubX
   } = {}) => {
     try {
       if (!senderId || !receiverId || !encryptedContent) return;
+
+      // try to fill missing receiverPubX
+      let finalReceiverPubX = receiverPubX ?? null;
+      if (!finalReceiverPubX) {
+        finalReceiverPubX =
+          latestPubKeyByUser.get(String(receiverId)) ??
+          latestPubKeyByUser.get(String(receiverId).toLowerCase()) ??
+          null;
+
+        // optional DB lookup if users table stores public_x
+        if (!finalReceiverPubX && supabase) {
+          const { data: u } = await supabase
+            .from('users')
+            .select('public_x,id,email')
+            .or(`id.eq.${receiverId},email.eq.${receiverId}`)
+            .maybeSingle();
+          finalReceiverPubX = u?.public_x ?? null;
+        }
+      }
 
       const msg = {
         id: crypto.randomUUID(),
@@ -239,7 +260,7 @@ io.on('connection', (socket) => {
         receiverId,
         encryptedContent,
         senderPubX: senderPubX ?? null,
-        receiverPubX: receiverPubX ?? null,
+        receiverPubX: finalReceiverPubX, // ✅ include on the wire
         createdAt: new Date().toISOString(),
       };
 
@@ -259,7 +280,7 @@ io.on('connection', (socket) => {
         statusForDb = 'sent';
       }
 
-      // persist
+      // persist (save both keys)
       persistMessageToSupabase({ ...msg, status: statusForDb }).catch(() => {});
       messagesInMemory.push(msg);
       if (messagesInMemory.length > 5000) messagesInMemory.shift();
