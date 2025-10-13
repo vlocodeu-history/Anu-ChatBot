@@ -251,7 +251,11 @@ export default function ChatPage() {
       const isFromMe = myIds.includes(m.senderId);
       if (isFromMe) return;
 
-      const payload = safeJson<WireCipher>(m.encryptedContent as any);
+      const payload: WireCipher | null =
+        typeof m.encryptedContent === 'string'
+          ? safeJson<WireCipher>(m.encryptedContent as any)
+          : (m.encryptedContent as any) || null;
+
       const candidates = [
         (m as any).senderPubX,
         (m as any).receiverPubX,
