@@ -11,7 +11,7 @@ import {
 import {
   onReceiveMessage,
   onMessageSent,
-  sendEncryptedMessage,      // socket sender (can accept extra args safely)
+  sendEncryptedMessage,      // now includes receiverPubX param
   goOnline,
   type WireMsg as SocketWireMsg,
 } from '@/services/socket';
@@ -345,8 +345,7 @@ export default function ChatPage() {
 
     try {
       // include BOTH public keys so receivers (and your own history) can always decrypt
-      // If your socket sender ignores extra args, that's fine.
-      (sendEncryptedMessage as any)(sender, receiver, ciphertext, myPublicB64, effectivePeerPubX);
+      sendEncryptedMessage(sender, receiver, ciphertext, myPublicB64, effectivePeerPubX);
     } catch {
       setItems((prev) => {
         const copy = [...prev];
